@@ -1,6 +1,10 @@
 # hyprland-canvas
 
-Infinite canvas for Hyprland — pan all floating windows like an infinite desktop.
+Pan floating windows like an infinite desktop on Hyprland.
+
+[![CI](https://img.shields.io/github/actions/workflow/status/zyrophix/hyprland-canvas/ci.yml)](https://github.com/zyrophix/hyprland-canvas/actions)
+[![Release](https://img.shields.io/github/v/release/zyrophix/hyprland-canvas)](https://github.com/zyrophix/hyprland-canvas/releases)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canvas mode per workspace. Runs as an unprivileged user daemon — communicates directly with Hyprland via its IPC socket and Lua API.
 
@@ -15,6 +19,8 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 - Runs as an unprivileged user daemon — no special permissions needed
 - Has a **Unix socket IPC** for keyboard-driven commands (navigate, toggle, invert)
 
+Honest limits: no render-level zoom (windows move, nothing scales), no touchpad gestures, no resize/move of tiled windows — pan, navigate, toggle, nothing else.
+
 ## Features
 
 | Feature | Keybind | Description |
@@ -27,6 +33,8 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 | Invert | SUPER+SHIFT+G | Invert pan direction |
 
 ## Install
+
+Requires: Hyprland 0.55+ (Lua config with `hl.*` API), Python 3.12+, `uv` or `pipx`.
 
 **uv (recommended):**
 ```bash
@@ -49,18 +57,31 @@ cd hyprland-canvas
 uv run canvasd
 ```
 
-This gives you two commands:
-- `canvasd` — the daemon
-- `canvas-ctl` — send commands to the daemon
-
-## Updating
-
 After pulling new code, reinstall and restart the daemon — an old installed copy keeps running until you do:
 
 ```bash
 git pull
 uv tool install . --force --reinstall   # or: pipx install . --force
 ```
+
+## Quickstart
+
+```bash
+canvasd &            # 1. start the daemon
+canvas-ctl ping      # 2. check it answers
+```
+
+Expected output:
+
+```
+PONG
+```
+
+```bash
+canvas-ctl status    # 3. show pan direction and state
+```
+
+Then add the Hyprland keybinds from [Usage](#usage) and drag with SUPER+SHIFT+LMB.
 
 ## Usage
 
@@ -122,24 +143,15 @@ end)
 
 ### 3. Control commands
 
+The full list lives in the CLI itself — `canvas-ctl --help` is canonical:
+
 ```bash
-canvas-ctl ping              # check if daemon is running
-canvas-ctl status            # show pan direction and state
-canvas-ctl pan-start         # start panning (called by mouse bind)
-canvas-ctl pan-stop          # stop panning (called by mouse release bind)
-canvas-ctl nav-left          # navigate to nearest window left
-canvas-ctl nav-right         # navigate to nearest window right
-canvas-ctl nav-up            # navigate to nearest window up
-canvas-ctl nav-down          # navigate to nearest window down
-canvas-ctl canvas-toggle     # toggle floating on current workspace (alias for -all)
-canvas-ctl canvas-toggle-all # toggle all windows on workspace (explicit)
-canvas-ctl canvas-toggle-single # toggle focused window only
-canvas-ctl toggle            # invert pan direction
-canvas-ctl edge-start       # start edge-scroll (called by mouse bind)
-canvas-ctl edge-stop        # stop edge-scroll (called by mouse release bind)
+canvas-ctl --help     # all 14 commands with one-line descriptions
+canvas-ctl ping       # check if daemon is running
+canvas-ctl status     # show pan direction and state
 ```
 
-## Configuration
+### Configuration
 
 All defaults are built into the daemon (`DEFAULT_CONFIG` in `canvas/config.py`) — it runs fine with no config file. The repo's `config.yml` is a ready-to-copy template; installed wheels/pipx/uv-tool packages do not include it. To customize, create `~/.config/canvas/config.yml`:
 
@@ -151,7 +163,7 @@ edge_scroll:
   enabled: true               # auto-pan when dragging window past screen edge
   ramp_distance: 50            # px of overflow to reach full speed
   speed: 20.0                  # max px/frame at full overflow (~1200 px/s at 60fps)
-  grab_dead_zone: 5            # px the window must actually move before camera may engage
+  grab_dead_zone: 5            # px of real movement before camera engages
   # max_speed: 30             # optional: cap per-frame edge-scroll delta (pixels)
 navigation:
   cooldown: 0.2               # seconds between nav commands
@@ -161,60 +173,26 @@ navigation:
     - firefox
 canvas:
   preserve_geometry: true     # remember floating window positions/sizes on OFF,
-                              # restore them on the next ON; tiled placement itself
-                              # is always layout-owned
+                               # restore them on the next ON; tiled placement itself
+                               # is always layout-owned
 ```
 
-Invalid values (wrong type, zero/negative numbers) are rejected at daemon startup with the exact offending keys listed on stderr.
+Invalid values (wrong type, zero/negative numbers) are rejected
+at daemon startup with the exact offending keys listed on stderr.
 
-## Architecture
+## Repo overview
 
-```
-canvasd (daemon)
-├── hypr.py        Direct Unix socket IPC to Hyprland
-├── panning.py     Cursor polling, pan state, edge-scroll state
-├── navigation.py  Window navigation, canvas toggle
-├── ipc.py         Unix socket server for canvas-ctl
-├── config.py      YAML config with deep merge
-└── daemon.py      Main loop, wires modules together
-```
+- `canvas/` — daemon source: `hypr.py` (IPC), `panning.py`,
+  `navigation.py`, `ipc.py` (ctl server), `config.py`, `daemon.py`
+- `tests/` — mocked pytest suite, no live compositor needed (`uv run pytest`)
+- `docs/` — architecture and debugging notes beyond this README
+- `config.yml` — ready-to-copy config template
+- `pyproject.toml` — package metadata, pytest/ruff/mypy config
 
-Key design decisions:
+## Contributing
 
-- **Cursor polling** — reads cursor position from Hyprland IPC, works on any Wayland setup
-- **`hl.dsp.window.move({window=w})` without focus** — passing a window object bypasses auto-focus, so no cursor warp or feedback loop
-- **Direct socket IPC** — a fresh Unix-socket connection per command (~0.1ms locally) instead of spawning a subprocess every frame
-- **Workspace-scoped** — pan, edge-scroll and navigation only move floating windows on the current workspace; other workspaces are never touched
-- **Ground-truth, direction-aware edge pan** — modeled after compositor-level implementations (driftwm, hevel): the camera assists only while a *confirmed* drag (window under cursor + focus match + moved past `grab_dead_zone`) pushes the window *toward* an edge or holds it there; pulling the window away from a boundary stops that side's assist immediately. The dragged window's real geometry is polled from Hyprland every frame — no cursor-derived guessing, so clicks on borders/gaps or holds without movement never move the camera on their own
-- **Idle timeout** (500ms) — auto-stops panning if Hyprland drops a mouse release event during active drag
-
-## Debugging
-
-Run the daemon with structured tracing to diagnose input/camera issues:
-
-```bash
-CANVAS_DEBUG=1 canvasd 2>&1 | tee /tmp/canvas-debug.log   # summary
-CANVAS_DEBUG=2 canvasd 2>&1 | tee /tmp/canvas-debug.log   # per-window details (class/title/at/size)
-```
-
-Trace lines are `<seconds> EVENT key=value …`. Useful events (level 1):
-
-- `CMD` — every IPC command with `cmd` + `result`
-- `STATE_LOAD / STATE_SAVE` — toggle snapshot counts per workspace
-- `SNAPSHOT_CREATE` — `ws, count, addrs, preserve_geometry`
-- `TOGGLE_ON / TOGGLE_OFF` — `ws, count, addrs` on canvas-toggle
-- `TILE_START / FLOAT_START` — `ws, targets` before Lua dispatch
-- `TILE_DONE / FLOAT_DONE` — after dispatch
-- `EDGE_START_DECISION`, `EDGE_SESSION_TICK` (10Hz), `EDGE_CONFIRMED`, `EDGE_DISARM`
-
-Level 2 adds per-window details: `SNAPSHOT_CREATE_DETAIL`, `TOGGLE_ON_DETAIL`, `STATE_LOAD_DETAIL`, `TILE_START_LIVE`, `TILE_WINDOW`-style live vs saved geometry with `class/title` (truncated to 30-40 chars).
-
-## Requirements
-
-- Hyprland 0.55+ (Lua config with `hl.*` API)
-- Python 3.12+
-- PyYAML
+PRs welcome. Run `uv run pytest` and `uv run ruff check` before submitting.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details.
