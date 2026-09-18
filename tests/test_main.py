@@ -1,5 +1,6 @@
 """Tests for canvas.__main__ — CLI entry points."""
 
+import contextlib
 import sys
 from unittest.mock import patch
 
@@ -12,7 +13,7 @@ def test_ctl_main_no_args_exits():
             ctl_main()
             raise AssertionError("should have exited")
         except SystemExit as e:
-            assert e.code == 1
+            assert e.code == 2
 
 
 def test_ctl_main_unknown_command_exits():
@@ -21,7 +22,7 @@ def test_ctl_main_unknown_command_exits():
             ctl_main()
             raise AssertionError("should have exited")
         except SystemExit as e:
-            assert e.code == 1
+            assert e.code == 2
 
 
 def test_ctl_main_valid_command_sends():
@@ -78,5 +79,76 @@ def test_ctl_main_error_response_exits():
 def test_daemon_main_calls_run():
     """daemon_main delegates to daemon.run()."""
     with patch("canvas.daemon.run") as mock_run:
-        daemon_main()
+        daemon_main([])
         mock_run.assert_called_once()
+
+
+def test_ctl_main_help_lists_commands(capsys):
+    """--help exits 0 and names every command (canonical list lives in code)."""
+    with patch.object(sys, "argv", ["canvas-ctl", "--help"]):
+        try:
+            ctl_main()
+            raise AssertionError("should have exited")
+        except SystemExit as e:
+            assert e.code == 0
+    out = capsys.readouterr().out
+    for name, _ in [
+        ("ping", ""),
+        ("status", ""),
+        ("pan-start", ""),
+        ("pan-stop", ""),
+        ("nav-left", ""),
+        ("nav-right", ""),
+        ("nav-up", ""),
+        ("nav-down", ""),
+        ("canvas-toggle", ""),
+        ("canvas-toggle-all", ""),
+        ("canvas-toggle-single", ""),
+        ("toggle", ""),
+        ("edge-start", ""),
+        ("edge-stop", ""),
+    ]:
+        assert name in out
+
+
+def test_ctl_main_version(capsys):
+    """--version exits 0 and prints name + version from a single source."""
+    from canvas import __version__
+
+    with patch.object(sys, "argv", ["canvas-ctl", "--version"]):
+        try:
+            ctl_main()
+            raise AssertionError("should have exited")
+        except SystemExit as e:
+            assert e.code == 0
+    out = capsys.readouterr().out
+    assert "canvas-ctl" in out and __version__ in out
+
+
+def test_daemon_main_help_and_rejects_positional(capsys):
+    """daemon --help exits 0; stray positionals exit 2 instead of starting."""
+    with patch.object(sys, "argv", ["canvasd", "--help"]):
+        try:
+            daemon_main()
+            raise AssertionError("should have exited")
+        except SystemExit as e:
+            assert e.code == 0
+    with patch.object(sys, "argv", ["canvasd", "--help"]):
+        try:
+            daemon_main()
+            raise AssertionError("should have exited")
+        except SystemExit as e:
+            assert e.code == 0
+    with patch.object(sys, "argv", ["canvasd", "whatever"]):
+        try:
+            daemon_main()
+            raise AssertionError("should have exited")
+        except SystemExit as e:
+            assert e.code == 2
+    with (
+        patch("canvas.daemon.run") as mock_run,
+        patch.object(sys, "argv", ["canvasd", "--version"]),
+        contextlib.suppress(SystemExit),
+    ):
+        daemon_main()
+        mock_run.assert_not_called()

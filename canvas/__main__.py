@@ -1,15 +1,52 @@
 """Canvas — Hyprland infinite desktop.
 
-Usage:
+Entry points (see pyproject.toml [project.scripts]):
     canvasd          Start the panning daemon
     canvas-ctl CMD   Send command to daemon
 """
 
+import argparse
 import sys
 
 
-def daemon_main() -> None:
+def _version() -> str:
+    """Single source of truth: installed metadata, fallback to package attr."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("hyprland-canvas")
+    except PackageNotFoundError:
+        from canvas import __version__
+
+        return __version__
+
+
+_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("ping", "check if daemon is running"),
+    ("status", "show pan direction and state"),
+    ("pan-start", "start panning (called by mouse bind)"),
+    ("pan-stop", "stop panning (called by mouse release bind)"),
+    ("nav-left", "navigate to nearest window left"),
+    ("nav-right", "navigate to nearest window right"),
+    ("nav-up", "navigate to nearest window up"),
+    ("nav-down", "navigate to nearest window down"),
+    ("canvas-toggle", "toggle floating on current workspace (alias for -all)"),
+    ("canvas-toggle-all", "toggle all windows on workspace (explicit)"),
+    ("canvas-toggle-single", "toggle focused window only"),
+    ("toggle", "invert pan direction"),
+    ("edge-start", "start edge-scroll (called by mouse bind)"),
+    ("edge-stop", "stop edge-scroll (called by mouse release bind)"),
+)
+
+
+def daemon_main(argv: list[str] | None = None) -> None:
     """Entry point for `canvasd`."""
+    parser = argparse.ArgumentParser(
+        prog="canvasd",
+        description="Hyprland infinite-canvas panning daemon.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
+    parser.parse_args(argv)
     from canvas.config import ConfigError
     from canvas.daemon import run
 
@@ -20,39 +57,8 @@ def daemon_main() -> None:
         sys.exit(1)
 
 
-def ctl_main() -> None:
-    """Entry point for `canvas-ctl`."""
+def _send(cmd: str) -> None:
     from canvas.ipc import send_command
-
-    if len(sys.argv) < 2:
-        cmds = (
-            "pan-start|pan-stop|nav-left|nav-right|nav-up|nav-down|toggle|"
-            "canvas-toggle|canvas-toggle-all|canvas-toggle-single|"
-            "edge-start|edge-stop|ping|status"
-        )
-        print(f"Usage: canvas-ctl <{cmds}>", file=sys.stderr)
-        sys.exit(1)
-
-    cmd = sys.argv[1].upper().replace("-", "_")
-    valid = {
-        "PAN_START",
-        "PAN_STOP",
-        "NAV_LEFT",
-        "NAV_RIGHT",
-        "NAV_UP",
-        "NAV_DOWN",
-        "TOGGLE",
-        "CANVAS_TOGGLE",
-        "CANVAS_TOGGLE_ALL",
-        "CANVAS_TOGGLE_SINGLE",
-        "EDGE_START",
-        "EDGE_STOP",
-        "PING",
-        "STATUS",
-    }
-    if cmd not in valid:
-        print(f"Unknown command: {sys.argv[1]}", file=sys.stderr)
-        sys.exit(1)
 
     response = send_command(cmd)
     if not response or response.startswith("ERROR"):
@@ -61,8 +67,24 @@ def ctl_main() -> None:
     print(response)
 
 
+def ctl_main(argv: list[str] | None = None) -> None:
+    """Entry point for `canvas-ctl`."""
+    parser = argparse.ArgumentParser(
+        prog="canvas-ctl",
+        description="Send commands to the canvas daemon.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
+    sub = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+    for name, help_text in _COMMANDS:
+        sub.add_parser(name, help=help_text).set_defaults(
+            func=_send, cmd=name.upper().replace("-", "_")
+        )
+    args = parser.parse_args(argv)
+    args.func(args.cmd)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "daemon":
-        daemon_main()
+        daemon_main(sys.argv[2:])
     else:
         ctl_main()
