@@ -4,6 +4,8 @@ Infinite canvas for Hyprland — pan all floating windows like an infinite deskt
 
 Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canvas mode per workspace. Runs as an unprivileged user daemon — communicates directly with Hyprland via its IPC socket and Lua API.
 
+<video src="https://github.com/user-attachments/assets/6bb06c3e-c553-481d-b726-15033ed8ac37" autoplay loop muted playsinline width="900">Demo: panning floating windows as an infinite desktop</video>
+
 ## Why
 
 Hyprland has no built-in infinite desktop. This daemon provides one by communicating with Hyprland the right way:
