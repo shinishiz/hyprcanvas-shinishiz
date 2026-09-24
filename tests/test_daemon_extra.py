@@ -183,6 +183,13 @@ def test_fetch_monitor_rect_empty_list_returns_false():
     assert ds._fetch_monitor_rect() is False
 
 
+def test_fetch_monitor_rect_rejects_missing_dimensions():
+    ipc = MagicMock()
+    ipc.send.return_value = '[{"focused":true,"x":0,"y":0}]'
+    ds = _make_daemon_state(ipc)
+    assert ds._fetch_monitor_rect() is False
+
+
 # --- mode exclusivity ---
 
 
@@ -223,12 +230,55 @@ def test_pan_start_cancels_active_edge_session():
     assert ds.edge_scroll.active is True
 
     ipc = MagicMock()
-    ipc.send.return_value = "[]"
+    ipc.send.side_effect = ['{"id":1}', "[]"]
     ds.ipc = ipc
-    ds.handle_ipc("PAN_START")
+    assert ds.handle_ipc("PAN_START") == "PAN_ON"
 
     assert ds.edge_scroll.active is False
     assert ds.panning.pan_active is True
+
+
+def test_pan_start_failure_does_not_activate_pan():
+    ipc = MagicMock()
+    ipc.send.side_effect = ConnectionError("fail")
+    ds = _make_daemon_state(ipc)
+
+    assert ds.handle_ipc("PAN_START") == "PAN_NO_BASELINE"
+    assert ds.panning.pan_active is False
+    assert ds.baselines == {}
+
+
+def test_navigation_stops_competing_modes():
+    ds = _make_daemon_state()
+    ds.panning.start_pan()
+    ds.baselines = {"0x1": (10, 20)}
+    ds.baseline_workspace = 1
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=200,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=350,
+        )
+    )
+
+    assert ds.handle_ipc("NAV_RIGHT") == "OK"
+
+    assert ds.panning.pan_active is False
+    assert ds.baselines == {}
+    assert ds.baseline_workspace is None
+    assert ds.edge_scroll.active is False
+    ds.navigator.navigate.assert_called_once_with("right")
+
+
+def test_navigation_reports_compositor_failure():
+    ds = _make_daemon_state()
+    ds.navigator.navigate.return_value = False
+
+    assert ds.handle_ipc("NAV_LEFT") == "ERROR:NAV_FAILED"
 
 
 def test_handle_ipc_canvas_toggle_stops_competing_modes():

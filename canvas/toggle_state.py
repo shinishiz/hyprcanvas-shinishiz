@@ -11,30 +11,44 @@ Written under XDG_RUNTIME_DIR (tmpfs): survives daemon restarts within
 a session, resets on reboot — matching the session-scoped nature of
 canvas mode itself.
 
-Format v2 on disk: {"_v": 2, "<ws>": {"tiled": {...}, "floating": {...}}}.
-Older files (list of addresses, or bare addr->geo without _v) are
-auto-migrated on load: addresses kept for OFF targeting, geometry
-dropped (old geos were tiled coords, useless as floating restore).
+Format v3 on disk: {"_v": 3, "<ws>": {"active": bool, "tiled": {...},
+"floating": {...}}}. The active bit distinguishes an all-floating canvas
+workspace from saved geometry for a workspace whose canvas mode is OFF.
+Older files are auto-migrated on load; v2 active state is inferred from
+whether its tiled snapshot is non-empty.
 """
 
 import json
 import logging
 import os
-from typing import Any
+from contextlib import suppress
+from typing import Any, TypedDict
 
 from canvas import debug
 
 log = logging.getLogger("canvas.toggle")
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
+
+
+class ToggleStateError(RuntimeError):
+    """Canvas toggle state could not be persisted."""
+
 
 Snapshot = dict[str, dict[str, list[int]]]
-WorkspaceState = dict[str, Snapshot]  # {"tiled": Snapshot, "floating": Snapshot}
+
+
+class WorkspaceState(TypedDict):
+    active: bool
+    tiled: Snapshot
+    floating: Snapshot
+
+
 State = dict[int, WorkspaceState]
 
 
 def _empty_workspace() -> WorkspaceState:
-    return {"tiled": {}, "floating": {}}
+    return {"active": False, "tiled": {}, "floating": {}}
 
 
 def default_path() -> str:
@@ -73,19 +87,22 @@ def _parse_snapshot(raw_snap: Any) -> Snapshot:
 def _parse_workspace(raw_ws: Any, version: int) -> WorkspaceState:
     """Parse one workspace entry, migrating old formats.
 
-    v2: {"tiled": {...}, "floating": {...}} — used as-is.
-    Older (list of addresses, or bare addr->geo without _v): addresses are
+    v3 adds an explicit active bit. v2 sections are accepted with active
+    inferred from a non-empty tiled snapshot. Older list/bare-dict formats:
+    addresses are
     kept for OFF targeting, geometry is dropped — old geos describe tiled
     slots, which must never be applied as floating positions.
     """
-    if (
-        version >= FORMAT_VERSION
-        and isinstance(raw_ws, dict)
-        and ("tiled" in raw_ws or "floating" in raw_ws)
-    ):
+    if version >= 2 and isinstance(raw_ws, dict) and ("tiled" in raw_ws or "floating" in raw_ws):
+        tiled = _parse_snapshot(raw_ws.get("tiled", {}))
+        floating = _parse_snapshot(raw_ws.get("floating", {}))
+        # v2 had no explicit active bit. Non-empty tiled snapshots were the only
+        # states that could represent an active canvas mode. v3 stores it directly.
+        active = raw_ws.get("active", bool(tiled)) if version >= FORMAT_VERSION else bool(tiled)
         return {
-            "tiled": _parse_snapshot(raw_ws.get("tiled", {})),
-            "floating": _parse_snapshot(raw_ws.get("floating", {})),
+            "active": active if isinstance(active, bool) else bool(tiled),
+            "tiled": tiled,
+            "floating": floating,
         }
     addrs: set[str] = set()
     if isinstance(raw_ws, list):
@@ -94,7 +111,7 @@ def _parse_workspace(raw_ws: Any, version: int) -> WorkspaceState:
         for addr in raw_ws:
             if isinstance(addr, str):
                 addrs.add(addr)
-    return {"tiled": {a: {} for a in addrs}, "floating": {}}
+    return {"active": bool(addrs), "tiled": {a: {} for a in addrs}, "floating": {}}
 
 
 def load(path: str | None = None) -> State:
@@ -146,17 +163,21 @@ def load(path: str | None = None) -> State:
 
 
 def save(state: State, path: str | None = None) -> None:
-    """Atomically persist snapshots (format v2 with tiled/floating sections)."""
+    """Atomically persist snapshots in the current on-disk format."""
     file = path or default_path()
+    tmp = file + ".tmp"
     try:
         os.makedirs(os.path.dirname(file), exist_ok=True)
-        tmp = file + ".tmp"
         # Sort for deterministic output
         serializable: dict[str, Any] = {"_v": FORMAT_VERSION}
         for ws, sections in sorted(state.items()):
+            tiled = sections.get("tiled", {})
             serializable[str(ws)] = {
-                section: {addr: geo for addr, geo in sorted(snap.items())}
-                for section, snap in sorted(sections.items())
+                "active": bool(sections.get("active", bool(tiled))),
+                "tiled": {addr: geo for addr, geo in sorted(tiled.items())},
+                "floating": {
+                    addr: geo for addr, geo in sorted(sections.get("floating", {}).items())
+                },
             }
         with open(tmp, "w") as f:
             json.dump(serializable, f)
@@ -177,6 +198,9 @@ def save(state: State, path: str | None = None) -> None:
             if debug.level() >= 2 and state:
                 debug.dbg2("STATE_SAVE_DETAIL", state=state)
     except Exception as e:
+        with suppress(OSError):
+            os.unlink(tmp)
         log.warning("could not write toggle state %s: %s", file, e)
         if debug.enabled():
             debug.dbg2("STATE_SAVE_ERROR", path=file, error=str(e))
+        raise ToggleStateError(f"could not persist toggle state to {file}") from e

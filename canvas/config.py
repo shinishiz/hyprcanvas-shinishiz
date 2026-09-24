@@ -1,6 +1,7 @@
 """Load YAML configuration with sensible defaults."""
 
 import copy
+import math
 import os
 from pathlib import Path
 from typing import Any, TypeGuard
@@ -58,8 +59,10 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def _is_num(value: object) -> TypeGuard[int | float]:
-    """True for int/float but not bool (bool is an int subclass in Python)."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """True for finite int/float, excluding bool."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    return not isinstance(value, float) or math.isfinite(value)
 
 
 def validate(cfg: dict[str, Any]) -> list[str]:
@@ -148,7 +151,11 @@ def load(path: str | None = None, skip_user: bool = False) -> dict[str, Any]:
     for candidate in candidates:
         if os.path.isfile(candidate):
             with open(candidate) as f:
-                user_cfg = yaml.safe_load(f) or {}
+                user_cfg = yaml.safe_load(f)
+            if user_cfg is None:
+                user_cfg = {}
+            if not isinstance(user_cfg, dict):
+                raise ConfigError("config root must be a mapping")
             cfg = _deep_merge(DEFAULT_CONFIG, user_cfg)
             problems = validate(cfg)
             if problems:

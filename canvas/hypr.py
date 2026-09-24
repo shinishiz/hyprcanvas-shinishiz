@@ -4,8 +4,8 @@ Hyprland's .socket.sock speaks a one-shot request-response protocol:
   connect → send b"<command>" → read response until EOF → close
 
 The server closes the connection after each response, so every send()
-opens a fresh connection. On a local Unix socket that costs ~0.1ms —
-negligible next to the compositor round-trip. Thread-safe via lock.
+opens a fresh connection. This avoids subprocess startup while keeping
+each request independent. Thread-safe via lock.
 
 WARNING: Hyprland processes IPC synchronously — an unclosed connection
 freezes the compositor for up to 5 seconds. Always close promptly.
@@ -20,6 +20,19 @@ import threading
 log = logging.getLogger("canvas.hypr")
 
 _MAX_RESPONSE = 16 * 1024 * 1024  # j/clients can be large; this is generous
+
+LUA_DISPATCH_HELPER = """
+local function _canvas_dispatch(result)
+  if type(result) ~= "table" or result.ok == false then
+    local message = type(result) == "table" and result.error or "dispatcher returned no result"
+    error(message or "dispatch failed")
+  end
+end
+""".strip()
+
+
+class HyprIPCError(RuntimeError):
+    """Hyprland returned a textual error response for an IPC request."""
 
 
 def _hypr_socket_path() -> str:
@@ -83,7 +96,11 @@ class HyprIPC:
             try:
                 s.sendall(command.encode())
                 s.shutdown(socket.SHUT_WR)
-                return self._recv_response(s)
+                response = self._recv_response(s)
+                if response.lower().startswith("error"):
+                    command_name = command.split(" ", 1)[0]
+                    raise HyprIPCError(f"Hyprland {command_name} failed: {response}")
+                return response
             finally:
                 s.close()
 

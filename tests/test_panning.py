@@ -457,6 +457,20 @@ def test_drag_toward_edge_then_back_stops():
     assert es.consume_delta() == (0, 0)
 
 
+def test_direction_reversal_discards_unconsumed_old_sign():
+    """A reversal before the main-loop consume must not apply stale motion."""
+    es = EdgeScrollState(ramp_distance=50, speed=20.0, grab_dead_zone=5)
+    es.set_monitor_rect(0, 0, 1920, 1080)
+    _start_edge(es, 900, 390)
+    es.update_geometry("0xabc", 950, 390, 500, 300, 1200, 540)
+
+    es.update_geometry("0xabc", 1500, 390, 500, 300, 1750, 540)
+    assert es.pending_preview[0] > 0
+
+    es.update_geometry("0xabc", 1480, 390, 500, 300, 1730, 540)
+    assert es.consume_delta() == (0, 0)
+
+
 def test_vertical_direction_gating():
     """Bottom-edge assist only while dy >= 0; pulling up stops it."""
     es = EdgeScrollState(ramp_distance=50, speed=20.0, grab_dead_zone=5)

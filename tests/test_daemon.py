@@ -546,6 +546,7 @@ def test_edge_scroll_move_excludes_dragged():
     assert "~=" in lua_code
     assert "relative = true" in lua_code
     assert "workspace = 5" in lua_code
+    assert "_canvas_dispatch" in lua_code
 
 
 def test_edge_scroll_move_without_workspace_is_noop():

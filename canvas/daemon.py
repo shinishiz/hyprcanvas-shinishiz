@@ -11,7 +11,7 @@ from typing import Any
 
 from canvas import debug
 from canvas.config import load
-from canvas.hypr import HyprIPC, get_cursor_pos
+from canvas.hypr import LUA_DISPATCH_HELPER, HyprIPC, get_cursor_pos
 from canvas.ipc import IpcServer, acquire_singleton
 from canvas.navigation import Navigator
 from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState, cursor_poller
@@ -49,29 +49,34 @@ class DaemonState:
         # floating layouts stay untouched.
         self.baseline_workspace: int | None = None
         self.edge_scroll_workspace: int | None = None
+        # Serializes compositor mutations from the IPC thread with main-loop
+        # pan/edge moves. State objects retain their own fine-grained locks.
+        self._operation_lock = threading.RLock()
 
     def _fetch_monitor_rect(self) -> bool:
         """Fetch focused monitor geometry for edge-scroll. True on success."""
         try:
             resp = self.ipc.send("j/monitors")
             monitors: list[dict[str, Any]] = json.loads(resp)
-            for m in monitors:
-                if m.get("focused", False):
-                    self.edge_scroll.set_monitor_rect(
-                        m.get("x", 0),
-                        m.get("y", 0),
-                        m.get("width", 1920),
-                        m.get("height", 1080),
-                    )
+            first_valid: tuple[int, int, int, int] | None = None
+            for monitor in monitors:
+                try:
+                    x = int(monitor["x"])
+                    y = int(monitor["y"])
+                    width = int(monitor["width"])
+                    height = int(monitor["height"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if width <= 0 or height <= 0:
+                    continue
+                rect = (x, y, width, height)
+                if first_valid is None:
+                    first_valid = rect
+                if monitor.get("focused", False):
+                    self.edge_scroll.set_monitor_rect(*rect)
                     return True
-            if monitors:
-                m = monitors[0]
-                self.edge_scroll.set_monitor_rect(
-                    m.get("x", 0),
-                    m.get("y", 0),
-                    m.get("width", 1920),
-                    m.get("height", 1080),
-                )
+            if first_valid is not None:
+                self.edge_scroll.set_monitor_rect(*first_valid)
                 return True
         except Exception as e:
             log.debug("fetch monitor rect failed: %s", e)
@@ -106,20 +111,24 @@ class DaemonState:
 
     def handle_ipc(self, cmd: str) -> str:
         """Process an IPC command, return response string."""
-        handler_name = self._IPC_DISPATCH.get(cmd)
-        if handler_name is not None:
-            handler: Callable[[], str] = getattr(self, handler_name)
-            result = handler()
-            debug.dbg("CMD", cmd=cmd, result=result)
-            return result
-        debug.dbg("CMD", cmd=cmd, result="UNKNOWN")
-        return f"UNKNOWN: {cmd}"
+        with self._operation_lock:
+            handler_name = self._IPC_DISPATCH.get(cmd)
+            if handler_name is not None:
+                handler: Callable[[], str] = getattr(self, handler_name)
+                result = handler()
+                debug.dbg("CMD", cmd=cmd, result=result)
+                return result
+            debug.dbg("CMD", cmd=cmd, result="UNKNOWN")
+            return f"UNKNOWN: {cmd}"
 
     def _handle_pan_start(self) -> str:
         if self.edge_scroll.active:
             self.edge_scroll.stop()
             debug.dbg2("MODE_SWITCH", to="pan", stopped="edge")
-        self.fetch_baselines()
+        if not self.fetch_baselines():
+            self.panning.stop_pan()
+            debug.dbg2("PAN_START", baselines=0, result="PAN_NO_BASELINE")
+            return "PAN_NO_BASELINE"
         result = self.panning.start_pan()
         debug.dbg2("PAN_START", baselines=len(self.baselines), result=result)
         return result
@@ -131,20 +140,20 @@ class DaemonState:
         return "PAN_OFF"
 
     def _handle_nav_left(self) -> str:
-        self.navigator.navigate("left")
-        return "OK"
+        self._stop_competing_modes("navigation")
+        return "OK" if self.navigator.navigate("left") else "ERROR:NAV_FAILED"
 
     def _handle_nav_right(self) -> str:
-        self.navigator.navigate("right")
-        return "OK"
+        self._stop_competing_modes("navigation")
+        return "OK" if self.navigator.navigate("right") else "ERROR:NAV_FAILED"
 
     def _handle_nav_up(self) -> str:
-        self.navigator.navigate("up")
-        return "OK"
+        self._stop_competing_modes("navigation")
+        return "OK" if self.navigator.navigate("up") else "ERROR:NAV_FAILED"
 
     def _handle_nav_down(self) -> str:
-        self.navigator.navigate("down")
-        return "OK"
+        self._stop_competing_modes("navigation")
+        return "OK" if self.navigator.navigate("down") else "ERROR:NAV_FAILED"
 
     def _get_focused_window_address(self) -> str:
         """Address of the focused window, empty string on failure."""
@@ -329,7 +338,7 @@ class DaemonState:
             self.baselines = {}
         return stopped
 
-    def fetch_baselines(self) -> None:
+    def fetch_baselines(self) -> bool:
         """Snapshot floating windows of the ACTIVE workspace as pan baselines."""
         try:
             ws_resp = self.ipc.send("j/activeworkspace")
@@ -351,10 +360,12 @@ class DaemonState:
                     baselines[addr] = (at[0], at[1])
             self.baselines = baselines
             self.baseline_workspace = workspace_id
+            return True
         except Exception as e:
             log.warning("fetch baselines failed: %s", e)
             self.baselines = {}
             self.baseline_workspace = None
+            return False
 
     def restore_baselines(self) -> None:
         """Move the snapshot's windows back to their pre-pan positions.
@@ -365,7 +376,10 @@ class DaemonState:
             return
         try:
             ws_id = int(self.baseline_workspace)
-            lines = [f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})"]
+            lines = [
+                LUA_DISPATCH_HELPER,
+                f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})",
+            ]
             lines.append("local bd = {")
             for addr, (bx, by) in self.baselines.items():
                 safe_addr = _lua_escape(addr)
@@ -375,9 +389,9 @@ class DaemonState:
             lines.append("  local b = bd[tostring(w.address)]")
             lines.append("  if b then")
             lines.append(
-                "    hl.dispatch(hl.dsp.window.move({"
+                "    _canvas_dispatch(hl.dispatch(hl.dsp.window.move({"
                 " x = b[1], y = b[2],"
-                " relative = false, window = w }))"
+                " relative = false, window = w })))"
             )
             lines.append("  end")
             lines.append("end")
@@ -396,7 +410,10 @@ class DaemonState:
             return
         try:
             ws_id = int(self.baseline_workspace)
-            lines = [f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})"]
+            lines = [
+                LUA_DISPATCH_HELPER,
+                f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})",
+            ]
             lines.append("local bd = {")
             for addr, (bx, by) in self.baselines.items():
                 safe_addr = _lua_escape(addr)
@@ -406,10 +423,10 @@ class DaemonState:
             lines.append("  local b = bd[tostring(w.address)]")
             lines.append("  if b then")
             lines.append(
-                f"    hl.dispatch(hl.dsp.window.move({{"
+                f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.move({{"
                 f" x = b[1] + {total_dx},"
                 f" y = b[2] + {total_dy},"
-                f" relative = false, window = w }}))"
+                f" relative = false, window = w }})))"
             )
             lines.append("  end")
             lines.append("end")
@@ -434,12 +451,13 @@ class DaemonState:
         try:
             safe_addr = _lua_escape(dragged)
             lua = (
+                f"{LUA_DISPATCH_HELPER}\n"
                 f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})\n"
                 f"for _, w in ipairs(ws) do\n"
                 f'  if tostring(w.address) ~= "{safe_addr}" then\n'
-                f"    hl.dispatch(hl.dsp.window.move({{"
+                f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.move({{"
                 f" x = {dx}, y = {dy},"
-                f" relative = true, window = w }}))\n"
+                f" relative = true, window = w }})))\n"
                 f"  end\n"
                 f"end\n"
             )
@@ -517,24 +535,28 @@ def run() -> None:
     try:
         prev_total = (0, 0)
         while not stop_event.is_set():
-            daemon_state.handle_idle_pan_stop()
+            with daemon_state._operation_lock:
+                daemon_state.handle_idle_pan_stop()
 
-            if not state.pan_active:
-                prev_total = (0, 0)
-            else:
-                total_dx, total_dy = state.get_total_delta()
-                if (total_dx, total_dy) != (0, 0) and (total_dx, total_dy) != prev_total:
-                    prev_total = (total_dx, total_dy)
-                    try:
-                        daemon_state.move_windows_to_delta(total_dx, total_dy)
-                    except Exception as e:
-                        log.warning("window move failed: %s", e)
+                if not state.pan_active:
+                    prev_total = (0, 0)
+                else:
+                    total_dx, total_dy = state.get_total_delta()
+                    if (
+                        total_dx,
+                        total_dy,
+                    ) != (0, 0) and (total_dx, total_dy) != prev_total:
+                        prev_total = (total_dx, total_dy)
+                        try:
+                            daemon_state.move_windows_to_delta(total_dx, total_dy)
+                        except Exception as e:
+                            log.warning("window move failed: %s", e)
 
-            edge_scroll.check_idle_timeout()
-            if edge_scroll.active:
-                es_dx, es_dy = edge_scroll.consume_delta()
-                if es_dx != 0 or es_dy != 0:
-                    daemon_state.edge_scroll_move(es_dx, es_dy)
+                edge_scroll.check_idle_timeout()
+                if edge_scroll.active:
+                    es_dx, es_dy = edge_scroll.consume_delta()
+                    if es_dx != 0 or es_dy != 0:
+                        daemon_state.edge_scroll_move(es_dx, es_dy)
 
             if not state.poller_alive:
                 poller_died = True
@@ -550,10 +572,11 @@ def run() -> None:
         log.info("shutting down: %s", exc)
     finally:
         stop_event.set()
-        daemon_state.restore_baselines()
         ipc_server.stop()
         cursor_thread.join(timeout=1)
         ipc_thread.join(timeout=1)
+        with daemon_state._operation_lock:
+            daemon_state.restore_baselines()
 
     if poller_died:
         # Exit non-zero so a supervisor (e.g. systemd Restart=on-failure)

@@ -125,6 +125,7 @@ def test_navigate_cooldown_blocks_rapid_calls():
         patch.object(nav, "_get_active_workspace_id", return_value=1),
         patch.object(nav, "_get_floating_windows", return_value=windows),
         patch.object(nav, "_get_focused_window", return_value=windows[0]),
+        patch.object(nav, "_get_monitor_center", return_value=(960, 540)),
         patch.object(nav, "_pan_to_window") as mock_pan,
     ):
         nav.navigate("right")
@@ -198,15 +199,60 @@ def test_canvas_toggle_off_with_empty_snapshot_skips_ipc():
 
     with (
         patch("canvas.navigation.toggle_state.load", return_value={}),
-        patch("canvas.navigation.toggle_state.save"),
+        patch("canvas.navigation.toggle_state.save") as msave,
     ):
         nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
         with patch.object(nav, "_get_active_workspace_id", return_value=1):
             assert nav.canvas_toggle() == "CANVAS_ON"
+            assert msave.call_args_list[0].args[0] == {
+                1: {"active": True, "tiled": {}, "floating": {}}
+            }
             ipc.reset_mock()
             assert nav.canvas_toggle() == "CANVAS_OFF"
 
         ipc.eval_lua.assert_not_called()
+
+
+def test_canvas_toggle_restores_empty_active_marker():
+    """v3 active=true preserves an all-floating canvas session across restart."""
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [_make_window("kitty", "0x2", 0, 0, 100, 100, floating=True)]
+    )
+    raw = {1: {"active": True, "tiled": {}, "floating": {}}}
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=raw),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        assert nav._canvas_mode_workspaces == {1: {}}
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_OFF"
+
+
+def test_canvas_toggle_distinguishes_inactive_floating_geometry():
+    """active=false with stored geometry must restore as the next ON, not OFF."""
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [_make_window("kitty", "0x2", 0, 0, 100, 100, floating=True)]
+    )
+    raw = {
+        1: {
+            "active": False,
+            "tiled": {},
+            "floating": {},
+        }
+    }
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=raw),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        assert 1 not in nav._canvas_mode_workspaces
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
 
 
 def test_canvas_toggle_after_restart_is_safe():
@@ -296,6 +342,9 @@ def test_canvas_toggle_on_restores_floating_geos():
         assert "size={400,300}" in restore_lua
         assert "hl.dsp.window.move" in restore_lua
         assert "hl.dsp.window.resize" in restore_lua
+        assert "x = g.size[1], y = g.size[2]" in restore_lua
+        assert "width = g.size[1]" not in restore_lua
+        assert "height = g.size[2]" not in restore_lua
 
 
 def test_canvas_toggle_on_without_stored_geos_skips_restore():

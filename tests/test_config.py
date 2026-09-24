@@ -176,10 +176,12 @@ def test_toggle_state_roundtrip(tmp_path):
     file = str(tmp_path / "toggle.json")
     state = {
         1: {
+            "active": True,
             "tiled": {"0xabc": {"at": [10, 20], "size": [500, 300]}, "0x2": {}},
             "floating": {"0xabc": {"at": [11, 21], "size": [500, 300]}},
         },
         7: {
+            "active": True,
             "tiled": {"0xfff": {"at": [0, 0], "size": [100, 100]}},
             "floating": {},
         },
@@ -193,6 +195,40 @@ def test_toggle_state_roundtrip(tmp_path):
     with open(file) as f:
         raw = json.load(f)
     assert raw["_v"] == FORMAT_VERSION
+    assert raw["1"]["active"] is True
+
+
+def test_toggle_state_v2_infers_active_from_tiled_snapshot(tmp_path):
+    import json
+
+    from canvas.toggle_state import load as ts_load
+
+    file = tmp_path / "toggle-v2.json"
+    file.write_text(
+        json.dumps(
+            {
+                "_v": 2,
+                "1": {"tiled": {"0xabc": {}}, "floating": {}},
+                "2": {"tiled": {}, "floating": {}},
+            }
+        )
+    )
+
+    loaded = ts_load(path=str(file))
+    assert loaded[1]["active"] is True
+    assert loaded[2]["active"] is False
+
+
+def test_toggle_state_v3_preserves_empty_active_marker(tmp_path):
+    import json
+
+    from canvas.toggle_state import load as ts_load
+
+    file = tmp_path / "toggle-v3.json"
+    file.write_text(json.dumps({"_v": 3, "1": {"active": True, "tiled": {}, "floating": {}}}))
+
+    loaded = ts_load(path=str(file))
+    assert loaded[1]["active"] is True
 
 
 def test_toggle_state_roundtrip_legacy_list(tmp_path):
@@ -206,8 +242,10 @@ def test_toggle_state_roundtrip_legacy_list(tmp_path):
     with open(file, "w") as f:
         json.dump({"1": ["0xabc", "0x2"], "7": ["0xfff"]}, f)
     loaded = ts_load(path=file)
+    assert loaded[1]["active"] is True
     assert set(loaded[1]["tiled"].keys()) == {"0xabc", "0x2"}
     assert loaded[1]["floating"] == {}
+    assert loaded[7]["active"] is True
     assert set(loaded[7]["tiled"].keys()) == {"0xfff"}
 
 
@@ -222,6 +260,7 @@ def test_toggle_state_migrates_v1_dict_dropping_geos(tmp_path):
         json.dump({"1": {"0xabc": {"at": [10, 20], "size": [500, 300]}}}, f)
     loaded = ts_load(path=file)
     # Address kept for OFF targeting, geometry dropped (was tiled slots)
+    assert loaded[1]["active"] is True
     assert set(loaded[1]["tiled"].keys()) == {"0xabc"}
     assert loaded[1]["tiled"]["0xabc"] == {}
     assert loaded[1]["floating"] == {}
@@ -260,3 +299,35 @@ def test_validate_rejects_bad_grab_dead_zone():
         }
     )
     assert any("grab_dead_zone" in p for p in problems)
+
+
+@pytest.mark.parametrize("content", ["speed: .nan\n", "speed: .inf\n"])
+def test_load_rejects_non_finite_numbers(tmp_path, content):
+    path = tmp_path / "config.yml"
+    path.write_text(content)
+
+    with pytest.raises(ConfigError, match="speed must be a number"):
+        load(str(path))
+
+
+@pytest.mark.parametrize("content", ["[]\n", "hello\n"])
+def test_load_rejects_non_mapping_root(tmp_path, content):
+    path = tmp_path / "config.yml"
+    path.write_text(content)
+
+    with pytest.raises(ConfigError, match="root must be a mapping"):
+        load(str(path))
+
+
+def test_toggle_state_save_raises_on_write_failure(tmp_path):
+    from unittest.mock import patch
+
+    from canvas.toggle_state import ToggleStateError
+    from canvas.toggle_state import save as ts_save
+
+    path = str(tmp_path / "toggle.json")
+    with (
+        patch("canvas.toggle_state.os.replace", side_effect=OSError("disk full")),
+        pytest.raises(ToggleStateError, match="could not persist"),
+    ):
+        ts_save({}, path=path)

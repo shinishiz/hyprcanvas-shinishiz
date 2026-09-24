@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-09-24
+
+### Fixed
+
+- Hyprland Lua keybind examples now use the supported `hl.bind` API.
+- Floating geometry restore uses Hyprland 0.55/0.56 resize arguments (`x`, `y`).
+- Hyprland textual IPC errors now prevent false-success canvas/navigation results.
+- Canvas toggle persists an explicit active marker and commits state around compositor actions.
+- Navigation and main-loop canvas moves are serialized to avoid competing pan/edge writes.
+- Edge-scroll no longer retains a stale movement direction across a fast reversal.
+- Invalid non-finite config values and malformed YAML roots fail validation cleanly.
+
 ## [1.3.0] — 2026-09-18
 
 ### Added

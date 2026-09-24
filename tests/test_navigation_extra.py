@@ -4,6 +4,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from canvas.navigation import Navigator, _safe_int
+from canvas.toggle_state import ToggleStateError
 
 
 def _make_nav(ipc: MagicMock | None = None) -> Navigator:
@@ -62,7 +63,7 @@ def test_get_floating_windows_error():
     ipc = MagicMock()
     ipc.send.side_effect = ConnectionError("fail")
     nav = _make_nav(ipc)
-    assert nav._get_floating_windows(1) == []
+    assert nav._get_floating_windows(1) is None
 
 
 def test_get_focused_window():
@@ -110,9 +111,7 @@ def test_get_monitor_center_error():
     ipc = MagicMock()
     ipc.send.side_effect = ConnectionError("fail")
     nav = _make_nav(ipc)
-    cx, cy = nav._get_monitor_center()
-    assert cx == 960
-    assert cy == 540
+    assert nav._get_monitor_center() is None
 
 
 def test_pan_to_window():
@@ -125,6 +124,7 @@ def test_pan_to_window():
     lua = ipc.eval_lua.call_args[0][0]
     assert "0x1" in lua
     assert "relative = true" in lua
+    assert "_canvas_dispatch" in lua
 
 
 def test_pan_to_window_target_not_found():
@@ -135,6 +135,29 @@ def test_pan_to_window_target_not_found():
     ipc.eval_lua.assert_not_called()
 
 
+def test_pan_to_window_reports_lua_failure():
+    ipc = MagicMock()
+    ipc.eval_lua.side_effect = RuntimeError("error: forced Lua failure")
+    nav = _make_nav(ipc)
+    windows = [_make_window("kitty", "0x1", 100, 200, 400, 300)]
+
+    assert nav._pan_to_window(windows, "0x1", 960, 540) is False
+
+
+def test_set_snapshot_floating_uses_explicit_action():
+    ipc = MagicMock()
+    ipc.eval_lua.return_value = "ok"
+    nav = _make_nav(ipc)
+    snapshot = {"0x1": {"at": [10, 20], "size": [400, 300]}}
+
+    assert nav._set_snapshot_floating(1, snapshot, floating=True) is True
+
+    lua = ipc.eval_lua.call_args[0][0]
+    assert 'action = "enable"' in lua
+    assert "window = w" in lua
+    assert "hl.get_windows({ workspace = 1 })" in lua
+
+
 def test_set_all_floating_make_float():
     ipc = MagicMock()
     ipc.eval_lua.return_value = "ok"
@@ -143,7 +166,10 @@ def test_set_all_floating_make_float():
     ipc.eval_lua.assert_called_once()
     lua = ipc.eval_lua.call_args[0][0]
     assert "floating = false" in lua
-    assert "float" in lua
+    assert "window.float" in lua
+    assert "window = w" in lua
+    assert "_canvas_dispatch" in lua
+    assert "dsp.focus" not in lua
 
 
 def test_set_all_floating_make_tiled():
@@ -160,6 +186,133 @@ def test_set_all_floating_error():
     ipc.eval_lua.side_effect = ConnectionError("fail")
     nav = _make_nav(ipc)
     nav._set_all_floating(1, floating=True)  # should not raise
+
+
+def test_canvas_toggle_on_does_not_commit_after_lua_failure():
+    """A compositor failure must not leave canvas mode marked active."""
+    tiled = [_make_window("kitty", "0x1", 0, 0, 400, 300, floating=False)]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(tiled)
+    ipc.eval_lua.side_effect = [RuntimeError("error: forced Lua failure"), "ok"]
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save") as save,
+    ):
+        nav = Navigator(ipc, [], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle_all() == "ERROR:FLOAT_FAILED"
+
+    assert 1 not in nav._canvas_mode_workspaces
+    assert save.call_count == 2
+    assert save.call_args_list[1].args[0] == {}
+
+
+def test_canvas_toggle_off_keeps_mode_after_tiling_failure():
+    """OFF state remains active when compositor tiling fails."""
+    stored = {1: {"tiled": {"0x1": {}}, "floating": {}}}
+    floating = [_make_window("kitty", "0x1", 10, 20, 400, 300, floating=True)]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(floating)
+    ipc.eval_lua.side_effect = [
+        RuntimeError("error: forced Lua failure"),
+        "ok",
+        "ok",
+    ]
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=stored),
+        patch("canvas.navigation.toggle_state.save") as save,
+    ):
+        nav = Navigator(ipc, [], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle_all() == "ERROR:TILE_FAILED"
+
+    assert 1 in nav._canvas_mode_workspaces
+    assert save.call_count == 2
+    assert save.call_args_list[1].args[0][1]["active"] is True
+
+
+def test_canvas_toggle_on_rollback_restores_preexisting_floating_window():
+    stored = {
+        1: {
+            "active": False,
+            "tiled": {},
+            "floating": {"0x2": {"at": [900, 700], "size": [400, 300]}},
+        }
+    }
+    pre_geometry = {"0x2": {"at": [100, 200], "size": [400, 300]}}
+    ipc = MagicMock()
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=stored),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc, [], cooldown=0.0)
+        with (
+            patch.object(nav, "_get_active_workspace_id", return_value=1),
+            patch.object(
+                nav,
+                "_snapshot_tiled_windows",
+                return_value={"0x1": {"at": [0, 0], "size": [400, 300]}},
+            ),
+            patch.object(nav, "_snapshot_floating_geos", return_value=pre_geometry),
+            patch.object(nav, "_set_all_floating", return_value=True),
+            patch.object(nav, "_restore_floating_geos", return_value=False),
+            patch.object(nav, "_set_snapshot_floating", return_value=True) as rollback,
+            patch.object(nav, "_apply_floating_geos", return_value=True) as apply_geo,
+        ):
+            assert nav.canvas_toggle_all() == "ERROR:GEOMETRY_RESTORE_FAILED"
+
+    rollback.assert_called_once()
+    apply_geo.assert_called_once_with(1, pre_geometry)
+
+
+def test_canvas_toggle_on_state_save_failure_skips_compositor_action():
+    """State must persist before any compositor mutation."""
+    tiled = [_make_window("kitty", "0x1", 0, 0, 400, 300, floating=False)]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(tiled)
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch(
+            "canvas.navigation.toggle_state.save",
+            side_effect=ToggleStateError("disk full"),
+        ),
+    ):
+        nav = Navigator(ipc, [], cooldown=0.0)
+        with (
+            patch.object(nav, "_get_active_workspace_id", return_value=1),
+            patch.object(nav, "_set_all_floating") as float_all,
+        ):
+            assert nav.canvas_toggle_all() == "ERROR:STATE_SAVE_FAILED"
+            float_all.assert_not_called()
+
+    assert 1 not in nav._canvas_mode_workspaces
+
+
+def test_canvas_toggle_off_state_save_failure_skips_tiling():
+    stored = {1: {"active": True, "tiled": {"0x1": {}}, "floating": {}}}
+    ipc = MagicMock()
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=stored),
+        patch(
+            "canvas.navigation.toggle_state.save",
+            side_effect=ToggleStateError("disk full"),
+        ),
+    ):
+        nav = Navigator(ipc, [], cooldown=0.0)
+        with (
+            patch.object(nav, "_get_active_workspace_id", return_value=1),
+            patch.object(nav, "_snapshot_floating_geos", return_value={}),
+            patch.object(nav, "_tile_windows") as tile,
+        ):
+            assert nav.canvas_toggle_all() == "ERROR:STATE_SAVE_FAILED"
+            tile.assert_not_called()
+
+    assert nav._canvas_mode_workspaces == {1: {"0x1": {}}}
 
 
 def test_canvas_toggle_no_workspace():
@@ -186,6 +339,15 @@ def test_safe_int_none():
 
     with pytest.raises(ValueError, match="unsafe Lua value"):
         _safe_int(None, "x")
+
+
+def test_navigate_reports_floating_query_failure():
+    nav = _make_nav(MagicMock())
+    with (
+        patch.object(nav, "_get_active_workspace_id", return_value=1),
+        patch.object(nav, "_get_floating_windows", return_value=None),
+    ):
+        assert nav.navigate("right") is False
 
 
 def test_navigate_no_workspace():

@@ -2,7 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
-from canvas.hypr import HyprIPC, eval_lua, get_cursor_pos, send
+import pytest
+
+from canvas.hypr import HyprIPC, HyprIPCError, eval_lua, get_cursor_pos, send
 
 
 def _make_ipc_with_mock(mock_sock: MagicMock) -> HyprIPC:
@@ -130,6 +132,16 @@ def test_send_empty_response():
     result = ipc.send("cursorpos")
 
     assert result == ""
+
+
+def test_send_raises_on_hyprland_error_response():
+    """Hyprland's textual error response must not look like success."""
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [b"error: eval failed", b""]
+    ipc = _make_ipc_with_mock(mock_sock)
+
+    with pytest.raises(HyprIPCError, match="eval failed"):
+        ipc.send("eval broken")
 
 
 def test_send_connection_error():

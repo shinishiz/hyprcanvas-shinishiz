@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from canvas import debug, toggle_state
-from canvas.hypr import HyprIPC
+from canvas.hypr import LUA_DISPATCH_HELPER, HyprIPC
 
 log = logging.getLogger("canvas.navigation")
 
@@ -56,12 +56,19 @@ class Navigator:
                 self._canvas_mode_workspaces[ws] = {
                     str(a): {} for a in sections if isinstance(a, str)
                 }
-            elif isinstance(sections, dict) and ("tiled" in sections or "floating" in sections):
+            elif isinstance(sections, dict) and (
+                "active" in sections or "tiled" in sections or "floating" in sections
+            ):
                 tiled = sections.get("tiled", {})
                 floating = sections.get("floating", {})
-                if isinstance(tiled, dict) and tiled:
+                if not isinstance(tiled, dict):
+                    tiled = {}
+                if not isinstance(floating, dict):
+                    floating = {}
+                active = sections.get("active", bool(tiled))
+                if active is True:
                     self._canvas_mode_workspaces[ws] = dict(tiled)
-                if isinstance(floating, dict) and floating:
+                if floating:
                     self._floating_geos[ws] = dict(floating)
             elif isinstance(sections, dict):
                 # Legacy v1 dict (addr->geo of tiled slots): keep addresses
@@ -169,29 +176,33 @@ class Navigator:
             return sorted(wrap, key=lambda x: x[1])[0][0]
         return None
 
-    def navigate(self, direction: str) -> None:
-        """Navigate to the nearest floating window in direction, panning canvas."""
+    def navigate(self, direction: str) -> bool:
+        """Navigate to the nearest floating window. False only on IPC failure."""
         current_time = time.monotonic()
         if current_time - self._last_nav_time < self._cooldown:
-            return
+            return True
         self._last_nav_time = current_time
 
         workspace_id = self._get_active_workspace_id()
         if workspace_id is None:
-            return
+            return False
 
         floating = self._get_floating_windows(workspace_id)
+        if floating is None:
+            return False
         if len(floating) <= 1:
-            return
+            return True
 
         focused = self._get_focused_window()
-        if focused is None or "address" not in focused:
-            return
+        if focused is None:
+            return False
+        if "address" not in focused:
+            return True
 
         current_addr = focused["address"]
         current_win = next((w for w in floating if w["address"] == current_addr), None)
         if current_win is None:
-            return
+            return True
 
         current_bounds = self._window_bounds(current_win)
         current_center = self._window_center(current_win)
@@ -218,20 +229,32 @@ class Navigator:
                         break
 
         if target_addr is None:
-            return
+            return True
 
-        center_x, center_y = self._get_monitor_center()
+        center = self._get_monitor_center()
+        if center is None:
+            return False
         floating_updated = self._get_floating_windows(workspace_id)
-        self._pan_to_window(floating_updated, target_addr, center_x, center_y, workspace_id)
+        if floating_updated is None:
+            return False
+        center_x, center_y = center
+        return self._pan_to_window(floating_updated, target_addr, center_x, center_y, workspace_id)
 
-    def _persist_canvas_state(self) -> None:
-        workspaces = set(self._canvas_mode_workspaces) | set(self._floating_geos)
-        state: dict[int, dict[str, dict[str, dict[str, list[int]]]]] = {}
+    def _persist_canvas_state(
+        self,
+        canvas_modes: dict[int, dict[str, dict[str, list[int]]]],
+        floating_geos: dict[int, dict[str, dict[str, list[int]]]],
+    ) -> None:
+        workspaces = set(canvas_modes) | set(floating_geos)
+        state: toggle_state.State = {}
         for ws in workspaces:
-            tiled = self._canvas_mode_workspaces.get(ws, {})
-            floating = self._floating_geos.get(ws, {})
-            if tiled or floating:
-                state[ws] = {"tiled": dict(tiled), "floating": dict(floating)}
+            if ws not in canvas_modes and ws not in floating_geos:
+                continue
+            state[ws] = {
+                "active": ws in canvas_modes,
+                "tiled": dict(canvas_modes.get(ws, {})),
+                "floating": dict(floating_geos.get(ws, {})),
+            }
         toggle_state.save(state)
 
     def canvas_toggle(self) -> str:
@@ -244,17 +267,54 @@ class Navigator:
             return "ERROR:NO_WORKSPACE"
 
         if workspace_id in self._canvas_mode_workspaces:
-            snapshot = self._canvas_mode_workspaces.pop(workspace_id)
-            # Capture where the floating windows actually are BEFORE tiling:
-            # this is the geometry the next ON restores. Tiled slots are
-            # layout-owned and must never be applied as floating positions.
+            snapshot = self._canvas_mode_workspaces[workspace_id]
+            captured: dict[str, dict[str, list[int]]] = {}
             if self._preserve_geometry and snapshot:
-                captured = self._snapshot_floating_geos(workspace_id, set(snapshot.keys()))
-                if captured:
-                    self._floating_geos[workspace_id] = captured
+                snapshot_result = self._snapshot_floating_geos(workspace_id, set(snapshot.keys()))
+                if snapshot_result is None:
+                    return "ERROR:SNAPSHOT_FAILED"
+                captured = snapshot_result
+
+            next_modes = dict(self._canvas_mode_workspaces)
+            next_modes.pop(workspace_id, None)
+            next_floating = dict(self._floating_geos)
+            if self._preserve_geometry and captured:
+                next_floating[workspace_id] = captured
             elif not self._preserve_geometry:
-                self._floating_geos.pop(workspace_id, None)
-            self._persist_canvas_state()
+                next_floating.pop(workspace_id, None)
+
+            # Persist the target state first. A persistence failure therefore
+            # cannot leave the compositor tiled while memory still says ON.
+            try:
+                self._persist_canvas_state(next_modes, next_floating)
+            except toggle_state.ToggleStateError as e:
+                log.warning("canvas OFF state save failed: %s", e)
+                return "ERROR:STATE_SAVE_FAILED"
+
+            if snapshot and not self._tile_windows(workspace_id, snapshot):
+                compositor_rollback = self._set_snapshot_floating(
+                    workspace_id, snapshot, floating=True
+                )
+                if captured:
+                    compositor_rollback = (
+                        self._apply_floating_geos(workspace_id, captured) and compositor_rollback
+                    )
+                state_rollback = True
+                try:
+                    self._persist_canvas_state(self._canvas_mode_workspaces, self._floating_geos)
+                except toggle_state.ToggleStateError as e:
+                    log.error("canvas OFF state rollback failed: %s", e)
+                    state_rollback = False
+                if not state_rollback and not compositor_rollback:
+                    return "ERROR:STATE_AND_COMPOSITOR_ROLLBACK_FAILED"
+                if not state_rollback:
+                    return "ERROR:STATE_ROLLBACK_FAILED"
+                if not compositor_rollback:
+                    return "ERROR:COMPOSITOR_ROLLBACK_FAILED"
+                return "ERROR:TILE_FAILED"
+
+            self._canvas_mode_workspaces = next_modes
+            self._floating_geos = next_floating
             if debug.enabled():
                 debug.dbg2(
                     "TOGGLE_OFF",
@@ -265,16 +325,62 @@ class Navigator:
                 if debug.level() >= 2:
                     geos = {a: snapshot[a] for a in sorted(snapshot.keys())}
                     debug.dbg2("TOGGLE_OFF_DETAIL", ws=workspace_id, geos=geos)
-            if snapshot:
-                self._tile_windows(workspace_id, snapshot)
-                return "CANVAS_OFF"
-            # Canvas was enabled on an already all-floating workspace:
-            # nothing to tile back, and that is not an error.
             return "CANVAS_OFF"
 
         tiled_snapshot = self._snapshot_tiled_windows(workspace_id)
-        self._canvas_mode_workspaces[workspace_id] = tiled_snapshot
-        self._persist_canvas_state()
+        if tiled_snapshot is None:
+            return "ERROR:SNAPSHOT_FAILED"
+        next_modes = dict(self._canvas_mode_workspaces)
+        next_modes[workspace_id] = tiled_snapshot
+        next_floating = dict(self._floating_geos)
+
+        # Restore-on-ON can also target windows that were already floating and
+        # therefore are absent from tiled_snapshot. Capture those separately so
+        # a partial geometry failure can roll them back too.
+        rollback_addresses = set(self._floating_geos.get(workspace_id, {})) - set(tiled_snapshot)
+        rollback_geos: dict[str, dict[str, list[int]]] = {}
+        if rollback_addresses:
+            rollback_result = self._snapshot_floating_geos(workspace_id, rollback_addresses)
+            if rollback_result is None:
+                return "ERROR:SNAPSHOT_FAILED"
+            rollback_geos = rollback_result
+
+        try:
+            self._persist_canvas_state(next_modes, next_floating)
+        except toggle_state.ToggleStateError as e:
+            log.warning("canvas ON state save failed: %s", e)
+            return "ERROR:STATE_SAVE_FAILED"
+
+        if not self._set_all_floating(workspace_id, floating=True):
+            failure = "ERROR:FLOAT_FAILED"
+        elif not self._restore_floating_geos(workspace_id):
+            failure = "ERROR:GEOMETRY_RESTORE_FAILED"
+        else:
+            failure = ""
+        if failure:
+            compositor_rollback = self._set_snapshot_floating(
+                workspace_id, tiled_snapshot, floating=False
+            )
+            if rollback_geos:
+                compositor_rollback = (
+                    self._apply_floating_geos(workspace_id, rollback_geos) and compositor_rollback
+                )
+            state_rollback = True
+            try:
+                self._persist_canvas_state(self._canvas_mode_workspaces, self._floating_geos)
+            except toggle_state.ToggleStateError as e:
+                log.error("canvas ON state rollback failed: %s", e)
+                state_rollback = False
+            if not state_rollback and not compositor_rollback:
+                return "ERROR:STATE_AND_COMPOSITOR_ROLLBACK_FAILED"
+            if not state_rollback:
+                return "ERROR:STATE_ROLLBACK_FAILED"
+            if not compositor_rollback:
+                return "ERROR:COMPOSITOR_ROLLBACK_FAILED"
+            return failure
+
+        self._canvas_mode_workspaces = next_modes
+        self._floating_geos = next_floating
         if debug.enabled():
             debug.dbg2(
                 "TOGGLE_ON",
@@ -285,8 +391,6 @@ class Navigator:
             )
             if debug.level() >= 2 and tiled_snapshot:
                 debug.dbg2("TOGGLE_ON_DETAIL", ws=workspace_id, geos=tiled_snapshot)
-        self._set_all_floating(workspace_id, floating=True)
-        self._restore_floating_geos(workspace_id)
         return "CANVAS_ON"
 
     def canvas_toggle_single(self) -> str:
@@ -299,12 +403,13 @@ class Navigator:
         was_floating = bool(focused.get("floating"))
         try:
             lua = (
+                f"{LUA_DISPATCH_HELPER}\n"
                 f"local w = nil\n"
                 f"for _, win in ipairs(hl.get_windows({{}})) do\n"
                 f'  if tostring(win.address) == "{addr}" then w = win; break end\n'
                 f"end\n"
-                f"if w then hl.dispatch(hl.dsp.window.float({{"
-                f' action = "toggle", window = w }})) end'
+                f"if w then _canvas_dispatch(hl.dispatch(hl.dsp.window.float({{"
+                f' action = "toggle", window = w }}))) end'
             )
             self._ipc.eval_lua(lua)
         except Exception as e:
@@ -312,7 +417,7 @@ class Navigator:
             return "ERROR:TOGGLE_FAILED"
         return "TILED" if was_floating else "FLOATED"
 
-    def _snapshot_tiled_windows(self, workspace_id: int) -> dict[str, dict[str, list[int]]]:
+    def _snapshot_tiled_windows(self, workspace_id: int) -> dict[str, dict[str, list[int]]] | None:
         """Snapshot of currently tiled windows on the workspace (pre-canvas state).
 
         When preserve_geometry is true, each entry stores at/size. Tiled
@@ -367,16 +472,17 @@ class Navigator:
             return snap
         except Exception as e:
             log.warning("snapshot tiled windows failed: %s", e)
-            return {}
+            return None
 
     def _snapshot_floating_geos(
-        self, workspace_id: int, addresses: set[str]
-    ) -> dict[str, dict[str, list[int]]]:
+        self, workspace_id: int, addresses: set[str] | None = None
+    ) -> dict[str, dict[str, list[int]]] | None:
         """Capture current FLOATING geometry for the given addresses.
 
         Unlike tiled slots (layout-owned), floating positions are
         authoritative — move/resize applies them exactly. These are the
-        coordinates the next canvas ON restores.
+        coordinates the next canvas ON restores. If addresses is None, capture
+        every floating window on the workspace.
         """
         try:
             resp = self._ipc.send("j/clients")
@@ -386,7 +492,7 @@ class Navigator:
                 if not w.get("floating"):
                     continue
                 addr = w.get("address")
-                if not isinstance(addr, str) or addr not in addresses:
+                if not isinstance(addr, str) or (addresses is not None and addr not in addresses):
                     continue
                 wsw = w.get("workspace")
                 if not isinstance(wsw, dict) or wsw.get("id") != workspace_id:
@@ -411,19 +517,21 @@ class Navigator:
             return geos
         except Exception as e:
             log.warning("snapshot floating geos failed: %s", e)
-            return {}
+            return None
 
-    def _restore_floating_geos(self, workspace_id: int) -> None:
-        """Move newly floated snapshot windows to stored floating geometry.
-
-        Runs after _set_all_floating so the windows are floating (and the
-        move/resize dispatches actually stick).
-        """
+    def _restore_floating_geos(self, workspace_id: int) -> bool:
+        """Move newly floated snapshot windows to stored floating geometry."""
         if not self._preserve_geometry:
-            return
+            return True
         stored = self._floating_geos.get(workspace_id, {})
+        return self._apply_floating_geos(workspace_id, stored)
+
+    def _apply_floating_geos(
+        self, workspace_id: int, stored: dict[str, dict[str, list[int]]]
+    ) -> bool:
+        """Apply known floating geometry to live windows on one workspace."""
         if not stored:
-            return
+            return True
         try:
             resp = self._ipc.send("j/clients")
             clients: list[dict[str, Any]] = json.loads(resp)
@@ -436,7 +544,7 @@ class Navigator:
             }
         except Exception as e:
             log.warning("restore floating geos failed: %s", e)
-            return
+            return False
         targets: dict[str, dict[str, list[int]]] = {}
         for addr in sorted(stored):
             if addr not in live or not _VALID_ADDR.match(addr):
@@ -453,8 +561,8 @@ class Navigator:
                 continue
             targets[addr] = {"at": at, "size": size}
         if not targets:
-            return
-        lines = ["local geos = {"]
+            return True
+        lines = [LUA_DISPATCH_HELPER, "local geos = {"]
         for addr, geo in targets.items():
             ax, ay = geo["at"]
             sw, sh = geo["size"]
@@ -468,12 +576,12 @@ class Navigator:
         lines.append("  local g = geos[tostring(w.address)]")
         lines.append("  if g then")
         lines.append(
-            "    hl.dispatch(hl.dsp.window.move({"
-            " x = g.at[1], y = g.at[2], relative = false, window = w }))"
+            "    _canvas_dispatch(hl.dispatch(hl.dsp.window.resize({"
+            " x = g.size[1], y = g.size[2], relative = false, window = w })))"
         )
         lines.append(
-            "    hl.dispatch(hl.dsp.window.resize({"
-            " width = g.size[1], height = g.size[2], window = w }))"
+            "    _canvas_dispatch(hl.dispatch(hl.dsp.window.move({"
+            " x = g.at[1], y = g.at[2], relative = false, window = w })))"
         )
         lines.append("  end")
         lines.append("end")
@@ -486,8 +594,10 @@ class Navigator:
             )
         try:
             self._ipc.eval_lua("\n".join(lines))
+            return True
         except Exception as e:
             log.warning("restore floating geos failed: %s", e)
+            return False
 
     @staticmethod
     def _toggle_order(snapshot: dict[str, dict[str, list[int]]]) -> list[str]:
@@ -512,7 +622,41 @@ class Navigator:
         positioned.sort()
         return [a for _, _, a in positioned] + sorted(plain)
 
-    def _tile_windows(self, workspace_id: int, snapshot: dict[str, dict[str, list[int]]]) -> None:
+    def _set_snapshot_floating(
+        self,
+        workspace_id: int,
+        snapshot: dict[str, dict[str, list[int]]],
+        floating: bool,
+    ) -> bool:
+        """Set an exact snapshot to floating/tiled without toggling other windows."""
+        ordered = self._toggle_order(snapshot)
+        if not ordered:
+            return True
+        ws_id = _safe_int(workspace_id, "workspace_id")
+        action = "enable" if floating else "disable"
+        lines = [LUA_DISPATCH_HELPER, "local order = {"]
+        lines.extend(f'  "{addr}",' for addr in ordered)
+        lines.append("}")
+        lines.append(f"local ws = hl.get_windows({{ workspace = {ws_id} }})")
+        lines.append("for _, addr in ipairs(order) do")
+        lines.append("  for _, w in ipairs(ws) do")
+        lines.append("    if tostring(w.address) == addr then")
+        lines.append(
+            "      _canvas_dispatch(hl.dispatch(hl.dsp.window.float({ "
+            f'action = "{action}", window = w }})))'
+        )
+        lines.append("      break")
+        lines.append("    end")
+        lines.append("  end")
+        lines.append("end")
+        try:
+            self._ipc.eval_lua("\n".join(lines))
+            return True
+        except Exception as e:
+            log.warning("snapshot floating rollback failed: %s", e)
+            return False
+
+    def _tile_windows(self, workspace_id: int, snapshot: dict[str, dict[str, list[int]]]) -> bool:
         """Tile exactly the windows recorded in the snapshot, leaving others floating.
 
         Plain per-window toggle: tiled placement is layout-owned, so no
@@ -524,7 +668,7 @@ class Navigator:
         if not ordered:
             if debug.enabled():
                 debug.dbg2("TILE_START", ws=workspace_id, targets=0, addrs=[])
-            return
+            return True
         ws_id = _safe_int(workspace_id, "workspace_id")
         if debug.enabled():
             debug.dbg2(
@@ -550,14 +694,17 @@ class Navigator:
                 debug.dbg2("TILE_START_LIVE", ws=workspace_id, live=live)
             except Exception as e:
                 debug.dbg2("TILE_START_LIVE_ERROR", ws=workspace_id, error=str(e))
-        lines = ["local order = {"]
+        lines = [LUA_DISPATCH_HELPER, "local order = {"]
         lines.extend(f'  "{a}",' for a in ordered)
         lines.append("}")
         lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
         lines.append("for _, addr in ipairs(order) do")
         lines.append("  for _, w in ipairs(ws) do")
         lines.append("    if tostring(w.address) == addr then")
-        lines.append('      hl.dispatch(hl.dsp.window.float({ action = "toggle", window = w }))')
+        lines.append(
+            "      _canvas_dispatch(hl.dispatch(hl.dsp.window.float({ "
+            'action = "toggle", window = w })))'
+        )
         lines.append("      break")
         lines.append("    end")
         lines.append("  end")
@@ -568,12 +715,14 @@ class Navigator:
             self._ipc.eval_lua("\n".join(lines))
             if debug.enabled():
                 debug.dbg2("TILE_DONE", ws=workspace_id, targets=len(ordered))
+            return True
         except Exception as e:
             log.warning("tile windows failed: %s", e)
             if debug.enabled():
                 debug.dbg2("TILE_ERROR", ws=workspace_id, error=str(e))
+            return False
 
-    def _set_all_floating(self, workspace_id: int, floating: bool) -> None:
+    def _set_all_floating(self, workspace_id: int, floating: bool) -> bool:
         """Make every currently-tiled window on the workspace floating (canvas ON).
 
         The inverse is intentionally NOT done here: turning canvas off must
@@ -610,22 +759,25 @@ class Navigator:
                             if w.get("address")
                         }
                         debug.dbg2("FLOAT_START_DETAIL", ws=workspace_id, details=details)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("float debug snapshot unavailable: %s", e)
             lua = (
-                f"local ws = hl.get_windows({{ floating = {fl}, "
-                f"workspace = {ws_id} }}) "
-                f"for _, w in ipairs(ws) do "
-                f"hl.dispatch(hl.dsp.focus({{ window = w }})) "
-                f'hl.dispatch(hl.dsp.window.float({{ action = "toggle" }})) end'
+                f"{LUA_DISPATCH_HELPER}\n"
+                f"local ws = hl.get_windows({{ floating = {fl}, workspace = {ws_id} }})\n"
+                f"for _, w in ipairs(ws) do\n"
+                f"  _canvas_dispatch(hl.dispatch(hl.dsp.window.float({{ "
+                f'action = "toggle", window = w }})))\n'
+                f"end"
             )
             self._ipc.eval_lua(lua)
             if debug.enabled():
                 debug.dbg2("FLOAT_DONE", ws=workspace_id, floating=floating)
+            return True
         except Exception as e:
             log.warning("set_all_floating failed: %s", e)
             if debug.enabled():
                 debug.dbg2("FLOAT_ERROR", ws=workspace_id, error=str(e))
+            return False
 
     def _is_protected(self, window: dict[str, Any]) -> bool:
         """Check if window class matches a protected app."""
@@ -639,7 +791,7 @@ class Navigator:
         center_x: int,
         center_y: int,
         workspace_id: int | None = None,
-    ) -> None:
+    ) -> bool:
         """Pan the workspace's floating windows so the target centers on monitor."""
         target = None
         for w in floating_windows:
@@ -648,7 +800,7 @@ class Navigator:
                 break
 
         if target is None:
-            return
+            return False
 
         target_cx = target["at"][0] + target["size"][0] // 2
         target_cy = target["at"][1] + target["size"][1] // 2
@@ -664,11 +816,12 @@ class Navigator:
             ws_filter = f", workspace = {_safe_int(workspace_id, 'workspace_id')}"
 
         lua = (
+            f"{LUA_DISPATCH_HELPER}\n"
             f"local ws = hl.get_windows({{ floating = true{ws_filter} }})\n"
             f"for _, w in ipairs(ws) do\n"
-            f"  hl.dispatch(hl.dsp.window.move({{"
+            f"  _canvas_dispatch(hl.dispatch(hl.dsp.window.move({{"
             f" x = {safe_dx}, y = {safe_dy},"
-            f" relative = true, window = w }}))\n"
+            f" relative = true, window = w }})))\n"
             f"end\n"
         )
 
@@ -681,13 +834,18 @@ class Navigator:
                     f"local _t = hl.get_windows({{ floating = true{ws_filter} }})\n"
                     f"for _, w in ipairs(_t) do\n"
                     f'  if tostring(w.address) == "{addr}" then\n'
-                    f"    hl.dispatch(hl.dsp.focus({{ window = w }}))\n"
+                    f"    _canvas_dispatch(hl.dispatch(hl.dsp.focus({{ window = w }})))\n"
                     f"    break\n"
                     f"  end\n"
                     f"end\n"
                 )
 
-        self._ipc.eval_lua(lua)
+        try:
+            self._ipc.eval_lua(lua)
+            return True
+        except Exception as e:
+            log.warning("navigation pan failed: %s", e)
+            return False
 
     def _get_active_workspace_id(self) -> int | None:
         try:
@@ -698,7 +856,7 @@ class Navigator:
             log.debug("get_active_workspace_id failed: %s", e)
             return None
 
-    def _get_floating_windows(self, workspace_id: int) -> list[dict[str, Any]]:
+    def _get_floating_windows(self, workspace_id: int) -> list[dict[str, Any]] | None:
         try:
             resp = self._ipc.send("j/clients")
             clients: list[dict[str, Any]] = json.loads(resp)
@@ -711,7 +869,7 @@ class Navigator:
             ]
         except Exception as e:
             log.debug("get_floating_windows failed: %s", e)
-            return []
+            return None
 
     def _get_focused_window(self) -> dict[str, Any] | None:
         try:
@@ -722,7 +880,7 @@ class Navigator:
             log.debug("get_focused_window failed: %s", e)
             return None
 
-    def _get_monitor_center(self) -> tuple[int, int]:
+    def _get_monitor_center(self) -> tuple[int, int] | None:
         try:
             resp = self._ipc.send("j/monitors")
             monitors: list[dict[str, Any]] = json.loads(resp)
@@ -734,4 +892,4 @@ class Navigator:
                 return m["x"] + m["width"] // 2, m["y"] + m["height"] // 2
         except Exception as e:
             log.debug("get_monitor_center failed: %s", e)
-        return 960, 540
+        return None

@@ -354,23 +354,30 @@ class EdgeScrollState:
             dist_bottom = (my + mh) - (y + h)
 
             before_x, before_y = self._pending_dx, self._pending_dy
+            tick_dx = 0.0
+            tick_dy = 0.0
 
             if dist_left < rd and win_dx <= 0:
                 progress = min((rd - dist_left) / rd, 1.0)
-                self._pending_dx -= self.speed * progress
+                tick_dx -= self.speed * progress
 
             if dist_right < rd and win_dx >= 0:
                 progress = min((rd - dist_right) / rd, 1.0)
-                self._pending_dx += self.speed * progress
+                tick_dx += self.speed * progress
 
             if dist_top < rd and win_dy <= 0:
                 progress = min((rd - dist_top) / rd, 1.0)
-                self._pending_dy -= self.speed * progress
+                tick_dy -= self.speed * progress
 
             if dist_bottom < rd and win_dy >= 0:
                 progress = min((rd - dist_bottom) / rd, 1.0)
-                self._pending_dy += self.speed * progress
+                tick_dy += self.speed * progress
 
+            # Replace, rather than accumulate, the pending camera delta. If the
+            # drag reverses before the main loop consumes it, stale motion from
+            # the previous direction must not survive.
+            self._pending_dx = tick_dx
+            self._pending_dy = tick_dy
             self._prev_x = x
             self._prev_y = y
 

@@ -14,7 +14,7 @@ Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canva
 
 Hyprland has no built-in infinite desktop. This daemon provides one by communicating with Hyprland the right way:
 
-- **Direct Unix socket IPC** to Hyprland (~0.1ms per frame) — no subprocess overhead
+- **Direct Unix socket IPC** to Hyprland — no per-request subprocess startup
 - **Hyprland Lua API** (`hl.dsp.window.move`) moves windows without focusing them — no cursor warp or flicker
 - Runs as an unprivileged user daemon — no special permissions needed
 - Has a **Unix socket IPC** for keyboard-driven commands (navigate, toggle, invert)
@@ -97,11 +97,11 @@ Hyprland 0.55+ uses Lua for config. Add these binds:
 
 ```lua
 -- Canvas: pan (mouse binds)
-hl.key.bind({"SUPER", "SHIFT"}, "mouse:272", function()
+hl.bind("SUPER + SHIFT + mouse:272", function()
     os.execute("canvas-ctl pan-start")
 end, { mouse = true })
 
-hl.key.bind({"SUPER", "SHIFT"}, "mouse:272", function()
+hl.bind("SUPER + SHIFT + mouse:272", function()
     os.execute("canvas-ctl pan-stop")
 end, { mouse = true, release = true })
 
@@ -116,27 +116,27 @@ hl.bind("SUPER + mouse:272", function()
 end, { mouse = true, release = true })
 
 -- Canvas: navigation (4-dir spatial)
-hl.key.bind({"SUPER", "SHIFT"}, "left", function()
+hl.bind("SUPER + SHIFT + left", function()
     os.execute("canvas-ctl nav-left")
 end)
-hl.key.bind({"SUPER", "SHIFT"}, "right", function()
+hl.bind("SUPER + SHIFT + right", function()
     os.execute("canvas-ctl nav-right")
 end)
-hl.key.bind({"SUPER", "SHIFT"}, "up", function()
+hl.bind("SUPER + SHIFT + up", function()
     os.execute("canvas-ctl nav-up")
 end)
-hl.key.bind({"SUPER", "SHIFT"}, "down", function()
+hl.bind("SUPER + SHIFT + down", function()
     os.execute("canvas-ctl nav-down")
 end)
 
 -- Canvas: toggle & invert
-hl.key.bind({"SUPER", "SHIFT"}, "C", function()
+hl.bind("SUPER + SHIFT + C", function()
     os.execute("canvas-ctl canvas-toggle")
 end)
-hl.key.bind({"SUPER", "SHIFT"}, "V", function()
+hl.bind("SUPER + SHIFT + V", function()
     os.execute("canvas-ctl canvas-toggle-single")
 end)
-hl.key.bind({"SUPER", "SHIFT"}, "G", function()
+hl.bind("SUPER + SHIFT + G", function()
     os.execute("canvas-ctl toggle")
 end)
 ```
