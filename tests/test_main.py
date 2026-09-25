@@ -37,6 +37,16 @@ def test_ctl_main_valid_command_sends():
         mock_print.assert_called_with("PONG")
 
 
+def test_ctl_main_center_cursor_command():
+    """canvas-ctl center-cursor normalizes to CENTER_CURSOR."""
+    with (
+        patch.object(sys, "argv", ["canvas-ctl", "center-cursor"]),
+        patch("canvas.ipc.send_command", return_value="OK") as mock_send,
+    ):
+        ctl_main()
+        mock_send.assert_called_with("CENTER_CURSOR")
+
+
 def test_ctl_main_edge_start_command():
     """canvas-ctl edge-start normalizes to EDGE_START."""
     with (
@@ -101,6 +111,7 @@ def test_ctl_main_help_lists_commands(capsys):
         ("nav-right", ""),
         ("nav-up", ""),
         ("nav-down", ""),
+        ("center-cursor", ""),
         ("canvas-toggle", ""),
         ("canvas-toggle-all", ""),
         ("canvas-toggle-single", ""),

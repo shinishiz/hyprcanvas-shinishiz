@@ -17,9 +17,9 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 - **Direct Unix socket IPC** to Hyprland — no per-request subprocess startup
 - **Hyprland Lua API** (`hl.dsp.window.move`) moves windows without focusing them — no cursor warp or flicker
 - Runs as an unprivileged user daemon — no special permissions needed
-- Has a **Unix socket IPC** for keyboard-driven commands (navigate, toggle, invert)
+- Has a **Unix socket IPC** for keybind-driven commands (navigate, center, toggle, invert)
 
-Honest limits: no render-level zoom (windows move, nothing scales), no touchpad gestures, no resize/move of tiled windows — pan, navigate, toggle, nothing else.
+Honest limits: no render-level zoom (windows move, nothing scales), no touchpad gestures, no resize/move of tiled windows — pan, navigate, center, toggle, nothing else.
 
 ## Features
 
@@ -28,6 +28,7 @@ Honest limits: no render-level zoom (windows move, nothing scales), no touchpad 
 | Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
 | Edge-scroll | SUPER+LMB | Drag a floating window toward the screen edge — camera follows (engages only for a confirmed drag of the window under the cursor) |
 | Navigate | SUPER+SHIFT+Arrows | Spatial jump to nearest window in direction (up/down/left/right), auto-pan to center |
+| Center under cursor | SUPER+MMB | Center the canvas on the topmost floating window under the mouse cursor without changing focus |
 | Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
 | Toggle single | SUPER+SHIFT+V | Toggle focused window floating ↔ tiled |
 | Invert | SUPER+SHIFT+G | Invert pan direction |
@@ -115,6 +116,11 @@ hl.bind("SUPER + mouse:272", function()
     hl.exec_cmd("canvas-ctl edge-stop")
 end, { mouse = true, release = true })
 
+-- Canvas: center view on the floating window under the cursor
+hl.bind("SUPER + mouse:274", function()
+    os.execute("canvas-ctl center-cursor")
+end, { mouse = true })
+
 -- Canvas: navigation (4-dir spatial)
 hl.bind("SUPER + SHIFT + left", function()
     os.execute("canvas-ctl nav-left")
@@ -146,9 +152,10 @@ end)
 The full list lives in the CLI itself — `canvas-ctl --help` is canonical:
 
 ```bash
-canvas-ctl --help     # all 14 commands with one-line descriptions
-canvas-ctl ping       # check if daemon is running
-canvas-ctl status     # show pan direction and state
+canvas-ctl --help         # all 15 commands with one-line descriptions
+canvas-ctl ping           # check if daemon is running
+canvas-ctl status         # show pan direction and state
+canvas-ctl center-cursor  # center the topmost floating window under the cursor
 ```
 
 ### Configuration

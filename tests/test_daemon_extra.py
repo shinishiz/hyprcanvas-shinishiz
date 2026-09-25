@@ -281,6 +281,104 @@ def test_navigation_reports_compositor_failure():
     assert ds.handle_ipc("NAV_LEFT") == "ERROR:NAV_FAILED"
 
 
+def test_center_cursor_centers_topmost_window_and_stops_competing_modes():
+    ds = _make_daemon_state()
+    ds.panning.start_pan()
+    ds.baselines = {"0x1": (10, 20)}
+    ds.baseline_workspace = 1
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xold",
+            win_x=0,
+            win_y=0,
+            win_w=400,
+            win_h=300,
+            cursor_x=100,
+            cursor_y=100,
+        )
+    )
+    target = {
+        "address": "0xabc",
+        "class": "kitty",
+        "floating": True,
+        "at": [300, 200],
+        "size": [400, 300],
+        "workspace": {"id": 1},
+    }
+    ds.ipc.get_cursor_pos.return_value = (500, 350)
+    ds.navigator.center_window.return_value = True
+
+    with (
+        patch.object(ds, "_get_active_workspace_id", return_value=1),
+        patch.object(ds, "_find_window_at_cursor", return_value=target),
+    ):
+        assert ds.handle_ipc("CENTER_CURSOR") == "OK"
+
+    assert ds.panning.is_dragging is False
+    assert ds.baselines == {}
+    assert ds.edge_scroll.active is False
+    ds.navigator.center_window.assert_called_once_with(
+        "0xabc", workspace_id=1, cursor_x=500, cursor_y=350
+    )
+
+
+def test_center_cursor_returns_no_window():
+    ds = _make_daemon_state()
+    ds.ipc.get_cursor_pos.return_value = (500, 350)
+
+    with (
+        patch.object(ds, "_get_active_workspace_id", return_value=1),
+        patch.object(ds, "_find_window_at_cursor", return_value=None),
+    ):
+        assert ds.handle_ipc("CENTER_CURSOR") == "ERROR:NO_WINDOW"
+
+    ds.navigator.center_window.assert_not_called()
+
+
+def test_center_cursor_reports_client_query_failure():
+    ds = _make_daemon_state()
+    ds.ipc.get_cursor_pos.return_value = (500, 350)
+    ds.ipc.send.side_effect = ConnectionError("fail")
+
+    with patch.object(ds, "_get_active_workspace_id", return_value=1):
+        assert ds.handle_ipc("CENTER_CURSOR") == "ERROR:QUERY_FAILED"
+
+    ds.navigator.center_window.assert_not_called()
+
+
+def test_center_cursor_returns_no_workspace():
+    ds = _make_daemon_state()
+    ds.ipc.get_cursor_pos.return_value = (500, 350)
+
+    with patch.object(ds, "_get_active_workspace_id", return_value=None):
+        assert ds.handle_ipc("CENTER_CURSOR") == "ERROR:NO_WORKSPACE"
+
+    ds.navigator.center_window.assert_not_called()
+
+
+def test_center_cursor_reports_cursor_and_compositor_failures():
+    ds = _make_daemon_state()
+    ds.ipc.get_cursor_pos.side_effect = ConnectionError("fail")
+    assert ds.handle_ipc("CENTER_CURSOR") == "ERROR:NO_CURSOR"
+
+    target = {
+        "address": "0xabc",
+        "class": "kitty",
+        "floating": True,
+        "at": [300, 200],
+        "size": [400, 300],
+        "workspace": {"id": 1},
+    }
+    ds.ipc.get_cursor_pos.side_effect = None
+    ds.ipc.get_cursor_pos.return_value = (500, 350)
+    ds.navigator.center_window.return_value = False
+    with (
+        patch.object(ds, "_get_active_workspace_id", return_value=1),
+        patch.object(ds, "_find_window_at_cursor", return_value=target),
+    ):
+        assert ds.handle_ipc("CENTER_CURSOR") == "ERROR:CENTER_FAILED"
+
+
 def test_handle_ipc_canvas_toggle_stops_competing_modes():
     """Canvas-toggle during pan/edge stops both so Lua outcome is deterministic."""
     ds = _make_daemon_state()

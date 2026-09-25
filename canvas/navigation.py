@@ -779,6 +779,47 @@ class Navigator:
                 debug.dbg2("FLOAT_ERROR", ws=workspace_id, error=str(e))
             return False
 
+    def center_window(
+        self,
+        target_addr: str,
+        workspace_id: int,
+        cursor_x: int,
+        cursor_y: int,
+    ) -> bool:
+        """Center a live target atomically without changing focus."""
+        if not _VALID_ADDR.match(target_addr):
+            return False
+        center = self._get_monitor_center(cursor_x, cursor_y)
+        if center is None:
+            return False
+        center_x, center_y = center
+        safe_x = _safe_int(center_x, "center_x")
+        safe_y = _safe_int(center_y, "center_y")
+        ws_id = _safe_int(workspace_id, "workspace_id")
+        lua = (
+            f"{LUA_DISPATCH_HELPER}\n"
+            f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})\n"
+            f"local target = nil\n"
+            f"for _, w in ipairs(ws) do\n"
+            f'  if tostring(w.address) == "{target_addr}" then target = w; break end\n'
+            f"end\n"
+            f'if not target then error("center target no longer exists") end\n'
+            f"local target_cx = target.at.x + math.floor(target.size.x / 2)\n"
+            f"local target_cy = target.at.y + math.floor(target.size.y / 2)\n"
+            f"local dx = {safe_x} - target_cx\n"
+            f"local dy = {safe_y} - target_cy\n"
+            f"for _, w in ipairs(ws) do\n"
+            f"  _canvas_dispatch(hl.dispatch(hl.dsp.window.move({{"
+            f" x = dx, y = dy, relative = true, window = w }})))\n"
+            f"end"
+        )
+        try:
+            self._ipc.eval_lua(lua)
+            return True
+        except Exception as e:
+            log.warning("center window failed: %s", e)
+            return False
+
     def _is_protected(self, window: dict[str, Any]) -> bool:
         """Check if window class matches a protected app."""
         window_class = window.get("class", "").lower()
@@ -880,16 +921,37 @@ class Navigator:
             log.debug("get_focused_window failed: %s", e)
             return None
 
-    def _get_monitor_center(self) -> tuple[int, int] | None:
+    def _get_monitor_center(
+        self, cursor_x: int | None = None, cursor_y: int | None = None
+    ) -> tuple[int, int] | None:
         try:
             resp = self._ipc.send("j/monitors")
             monitors: list[dict[str, Any]] = json.loads(resp)
-            for m in monitors:
-                if m.get("focused", False):
-                    return m["x"] + m["width"] // 2, m["y"] + m["height"] // 2
-            if monitors:
-                m = monitors[0]
-                return m["x"] + m["width"] // 2, m["y"] + m["height"] // 2
+            parsed: list[tuple[dict[str, Any], int, int, int, int]] = []
+            for monitor in monitors:
+                try:
+                    x = int(monitor["x"])
+                    y = int(monitor["y"])
+                    width = int(monitor["width"])
+                    height = int(monitor["height"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if width <= 0 or height <= 0:
+                    continue
+                parsed.append((monitor, x, y, width, height))
+
+            if cursor_x is not None and cursor_y is not None:
+                for _monitor, x, y, width, height in parsed:
+                    if x <= cursor_x < x + width and y <= cursor_y < y + height:
+                        return x + width // 2, y + height // 2
+                return None
+
+            for monitor, x, y, width, height in parsed:
+                if monitor.get("focused", False):
+                    return x + width // 2, y + height // 2
+            if parsed:
+                _monitor, x, y, width, height = parsed[0]
+                return x + width // 2, y + height // 2
         except Exception as e:
             log.debug("get_monitor_center failed: %s", e)
         return None

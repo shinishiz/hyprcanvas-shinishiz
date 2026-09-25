@@ -429,6 +429,51 @@ def test_handle_ipc_edge_start_overlap_last_wins():
     assert ds.edge_scroll.dragged_addr == "0xbbb"
 
 
+def test_find_window_at_cursor_skips_hidden_and_fullscreen_overlaps():
+    """Pinned windows stay movable; hidden/fullscreen clients are skipped."""
+    clients = [
+        {
+            "address": "0xvisible",
+            "floating": True,
+            "at": [100, 100],
+            "size": [400, 300],
+            "workspace": {"id": 1},
+        },
+        {
+            "address": "0xhidden",
+            "floating": True,
+            "hidden": True,
+            "at": [100, 100],
+            "size": [400, 300],
+            "workspace": {"id": 1},
+        },
+        {
+            "address": "0xpinned",
+            "floating": True,
+            "pinned": True,
+            "at": [100, 100],
+            "size": [400, 300],
+            "workspace": {"id": 1},
+        },
+        {
+            "address": "0xfullscreen",
+            "floating": True,
+            "fullscreen": 1,
+            "at": [100, 100],
+            "size": [400, 300],
+            "workspace": {"id": 1},
+        },
+    ]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(clients)
+    ds = _make_daemon_state(ipc)
+
+    found = ds._find_window_at_cursor(300, 250, 1)
+
+    assert found is not None
+    assert found["address"] == "0xpinned"
+
+
 def test_handle_ipc_edge_start_tiled_only_under_cursor():
     """A tiled window under the cursor is not canvas-draggable."""
     ipc = MagicMock()

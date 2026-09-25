@@ -99,6 +99,7 @@ class DaemonState:
         "NAV_RIGHT": "_handle_nav_right",
         "NAV_UP": "_handle_nav_up",
         "NAV_DOWN": "_handle_nav_down",
+        "CENTER_CURSOR": "_handle_center_cursor",
         "EDGE_START": "_handle_edge_start",
         "EDGE_STOP": "_handle_edge_stop",
         "TOGGLE": "_handle_toggle",
@@ -155,6 +156,46 @@ class DaemonState:
         self._stop_competing_modes("navigation")
         return "OK" if self.navigator.navigate("down") else "ERROR:NAV_FAILED"
 
+    def _handle_center_cursor(self) -> str:
+        self._stop_competing_modes("center-cursor")
+        try:
+            cursor_x, cursor_y = self.ipc.get_cursor_pos()
+        except Exception as e:
+            log.debug("center-cursor: cursor query failed: %s", e)
+            return "ERROR:NO_CURSOR"
+
+        workspace_id = self._get_active_workspace_id()
+        if workspace_id is None:
+            return "ERROR:NO_WORKSPACE"
+
+        try:
+            target = self._find_window_at_cursor(cursor_x, cursor_y, workspace_id, strict=True)
+        except Exception as e:
+            log.debug("center-cursor: client query failed: %s", e)
+            return "ERROR:QUERY_FAILED"
+        if target is None:
+            return "ERROR:NO_WINDOW"
+
+        try:
+            centered = self.navigator.center_window(
+                str(target.get("address", "")),
+                workspace_id=workspace_id,
+                cursor_x=cursor_x,
+                cursor_y=cursor_y,
+            )
+        except Exception as e:
+            log.warning("center-cursor failed: %s", e)
+            return "ERROR:CENTER_FAILED"
+        if not centered:
+            return "ERROR:CENTER_FAILED"
+        debug.dbg2(
+            "CENTER_CURSOR",
+            ws=workspace_id,
+            target=target.get("address"),
+            cursor=(cursor_x, cursor_y),
+        )
+        return "OK"
+
     def _get_focused_window_address(self) -> str:
         """Address of the focused window, empty string on failure."""
         try:
@@ -165,24 +206,30 @@ class DaemonState:
             log.debug("get focused window address failed: %s", e)
             return ""
 
-    def _find_window_at_cursor(self, cx: int, cy: int, workspace_id: int) -> dict[str, Any] | None:
-        """Floating window on the workspace whose rect contains the cursor.
+    def _find_window_at_cursor(
+        self, cx: int, cy: int, workspace_id: int, *, strict: bool = False
+    ) -> dict[str, Any] | None:
+        """Movable floating window on the workspace whose rect contains the cursor.
 
         Hyprland's window.drag() moves whatever is under the pointer, not
         the previously focused window — geometry must come from the same
-        place. On overlap the last match wins (clients are listed
-        bottom-to-top-ish).
+        place. Shared by edge-scroll and center-cursor. On overlap the last
+        match wins: Hyprland's clients vector is bottom-to-top.
         """
         try:
             resp = self.ipc.send("j/clients")
             clients: list[dict[str, Any]] = json.loads(resp)
         except Exception as e:
+            if strict:
+                raise
             log.debug("find window at cursor failed: %s", e)
             return None
 
         found: dict[str, Any] | None = None
         for w in clients:
             if not w.get("floating"):
+                continue
+            if w.get("hidden") or w.get("fullscreen"):
                 continue
             wsw = w.get("workspace")
             if not isinstance(wsw, dict) or wsw.get("id") != workspace_id:

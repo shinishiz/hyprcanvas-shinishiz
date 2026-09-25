@@ -107,6 +107,29 @@ def test_get_monitor_center_fallback_first():
     assert cx == 2880
 
 
+def test_get_monitor_center_uses_point_under_cursor():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080},
+            {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center(2500, 100) == (2880, 540)
+
+
+def test_get_monitor_center_rejects_point_outside_all_monitors():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [{"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080}]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center(5000, 5000) is None
+
+
 def test_get_monitor_center_error():
     ipc = MagicMock()
     ipc.send.side_effect = ConnectionError("fail")
@@ -125,6 +148,37 @@ def test_pan_to_window():
     assert "0x1" in lua
     assert "relative = true" in lua
     assert "_canvas_dispatch" in lua
+
+
+def test_center_window_resolves_live_target_in_single_lua_eval():
+    ipc = MagicMock()
+    ipc.eval_lua.return_value = "ok"
+    nav = _make_nav(ipc)
+
+    with patch.object(nav, "_get_monitor_center", return_value=(960, 540)):
+        assert nav.center_window("0x1", workspace_id=1, cursor_x=300, cursor_y=350) is True
+
+    lua = ipc.eval_lua.call_args.args[0]
+    assert 'tostring(w.address) == "0x1"' in lua
+    assert 'error("center target no longer exists")' in lua
+    assert "target.at.x + math.floor(target.size.x / 2)" in lua
+    assert "dsp.focus" not in lua
+
+
+def test_center_window_fails_without_monitor():
+    nav = _make_nav(MagicMock())
+
+    with patch.object(nav, "_get_monitor_center", return_value=None):
+        assert nav.center_window("0x1", workspace_id=1, cursor_x=300, cursor_y=350) is False
+
+
+def test_center_window_reports_disappeared_target():
+    ipc = MagicMock()
+    ipc.eval_lua.side_effect = RuntimeError("error: center target no longer exists")
+    nav = _make_nav(ipc)
+
+    with patch.object(nav, "_get_monitor_center", return_value=(960, 540)):
+        assert nav.center_window("0x1", workspace_id=1, cursor_x=300, cursor_y=350) is False
 
 
 def test_pan_to_window_target_not_found():

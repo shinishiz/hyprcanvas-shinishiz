@@ -30,6 +30,7 @@ _COMMANDS: tuple[tuple[str, str], ...] = (
     ("nav-right", "navigate to nearest window right"),
     ("nav-up", "navigate to nearest window up"),
     ("nav-down", "navigate to nearest window down"),
+    ("center-cursor", "center canvas on floating window under cursor"),
     ("canvas-toggle", "toggle floating on current workspace (alias for -all)"),
     ("canvas-toggle-all", "toggle all windows on workspace (explicit)"),
     ("canvas-toggle-single", "toggle focused window only"),
