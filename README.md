@@ -152,10 +152,9 @@ end)
 The full list lives in the CLI itself — `canvas-ctl --help` is canonical:
 
 ```bash
-canvas-ctl --help         # all 15 commands with one-line descriptions
-canvas-ctl ping           # check if daemon is running
-canvas-ctl status         # show pan direction and state
-canvas-ctl center-cursor  # center the topmost floating window under the cursor
+canvas-ctl --help  # all 15 commands with one-line descriptions
+canvas-ctl ping    # check if daemon is running
+canvas-ctl status  # show pan direction and state
 ```
 
 ### Configuration
