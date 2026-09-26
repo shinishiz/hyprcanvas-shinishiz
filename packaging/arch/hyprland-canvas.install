@@ -1,0 +1,9 @@
+post_install() {
+  echo "hyprland-canvas installed."
+  echo "Start the daemon with: canvasd"
+  echo "Add the keybinds from the project README."
+}
+
+post_upgrade() {
+  post_install
+}

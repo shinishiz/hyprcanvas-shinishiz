@@ -35,7 +35,7 @@ Honest limits: no render-level zoom (windows move, nothing scales), no touchpad 
 
 ## Install
 
-Requires: Hyprland 0.55+ (Lua config with `hl.*` API), Python 3.12+, `uv` or `pipx`.
+Requires: Hyprland 0.55+ (Lua config with `hl.*` API), Python 3.12+, `uv`, `pipx`, or Arch `makepkg`.
 
 **uv (recommended):**
 
@@ -51,6 +51,14 @@ uv tool install .
 git clone https://github.com/zyrophix/hyprland-canvas.git
 cd hyprland-canvas
 pipx install .
+```
+
+**Arch Linux (makepkg):**
+
+```bash
+git clone https://github.com/zyrophix/hyprland-canvas.git
+cd hyprland-canvas/packaging/arch
+makepkg -si
 ```
 
 **Run from source (no install):**

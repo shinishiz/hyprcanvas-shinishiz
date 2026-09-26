@@ -1,0 +1,25 @@
+# Maintainer: zyrophix
+pkgname=hyprland-canvas
+pkgver=1.4.1
+pkgrel=1
+pkgdesc="Infinite canvas for Hyprland — pan floating windows like an infinite desktop"
+arch=('any')
+url="https://github.com/zyrophix/hyprland-canvas"
+license=('MIT')
+depends=('hyprland>=0.55' 'python>=3.12' 'python-yaml')
+makedepends=('python-build' 'python-hatchling' 'python-installer' 'fakeroot')
+source=("hyprland-canvas::git+https://github.com/zyrophix/hyprland-canvas.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$pkgname"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 config.yml "$pkgdir/usr/share/hyprland-canvas/config.yml"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
