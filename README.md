@@ -102,11 +102,11 @@ Hyprland 0.55+ uses Lua for config. Add these binds:
 ```lua
 -- Canvas: pan (mouse binds)
 hl.bind("SUPER + SHIFT + mouse:272", function()
-    os.execute("canvas-ctl pan-start")
+    hl.exec_cmd("canvas-ctl pan-start")
 end, { mouse = true })
 
 hl.bind("SUPER + SHIFT + mouse:272", function()
-    os.execute("canvas-ctl pan-stop")
+    hl.exec_cmd("canvas-ctl pan-stop")
 end, { mouse = true, release = true })
 
 -- Canvas: edge-scroll (drag window to screen edge → camera follows)
@@ -120,35 +120,21 @@ hl.bind("SUPER + mouse:272", function()
 end, { mouse = true, release = true })
 
 -- Canvas: center view on the floating window under the cursor
-hl.bind("SUPER + mouse:274", function()
-    os.execute("canvas-ctl center-cursor")
-end, { mouse = true })
+hl.bind("SUPER + mouse:274", hl.dsp.exec_cmd("canvas-ctl center-cursor"), { mouse = true })
 
 -- Canvas: navigation (4-dir spatial)
-hl.bind("SUPER + SHIFT + left", function()
-    os.execute("canvas-ctl nav-left")
-end)
-hl.bind("SUPER + SHIFT + right", function()
-    os.execute("canvas-ctl nav-right")
-end)
-hl.bind("SUPER + SHIFT + up", function()
-    os.execute("canvas-ctl nav-up")
-end)
-hl.bind("SUPER + SHIFT + down", function()
-    os.execute("canvas-ctl nav-down")
-end)
+hl.bind("SUPER + SHIFT + left", hl.dsp.exec_cmd("canvas-ctl nav-left"))
+hl.bind("SUPER + SHIFT + right", hl.dsp.exec_cmd("canvas-ctl nav-right"))
+hl.bind("SUPER + SHIFT + up", hl.dsp.exec_cmd("canvas-ctl nav-up"))
+hl.bind("SUPER + SHIFT + down", hl.dsp.exec_cmd("canvas-ctl nav-down"))
 
 -- Canvas: toggle & invert
-hl.bind("SUPER + SHIFT + C", function()
-    os.execute("canvas-ctl canvas-toggle")
-end)
-hl.bind("SUPER + SHIFT + V", function()
-    os.execute("canvas-ctl canvas-toggle-single")
-end)
-hl.bind("SUPER + SHIFT + G", function()
-    os.execute("canvas-ctl toggle")
-end)
+hl.bind("SUPER + SHIFT + C", hl.dsp.exec_cmd("canvas-ctl canvas-toggle"))
+hl.bind("SUPER + SHIFT + V", hl.dsp.exec_cmd("canvas-ctl canvas-toggle-single"))
+hl.bind("SUPER + SHIFT + G", hl.dsp.exec_cmd("canvas-ctl toggle"))
 ```
+
+The examples use Hyprland's `hl.exec_cmd()` and `hl.dsp.exec_cmd()` APIs because `os.execute()` may be unavailable in the Hyprland Lua runtime.
 
 ### 3. Control commands
 
