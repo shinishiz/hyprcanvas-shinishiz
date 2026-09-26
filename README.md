@@ -134,8 +134,6 @@ hl.bind("SUPER + SHIFT + V", hl.dsp.exec_cmd("canvas-ctl canvas-toggle-single"))
 hl.bind("SUPER + SHIFT + G", hl.dsp.exec_cmd("canvas-ctl toggle"))
 ```
 
-The examples use Hyprland's `hl.exec_cmd()` and `hl.dsp.exec_cmd()` APIs because `os.execute()` may be unavailable in the Hyprland Lua runtime.
-
 ### 3. Control commands
 
 The full list lives in the CLI itself — `canvas-ctl --help` is canonical:
