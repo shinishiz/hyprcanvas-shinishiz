@@ -1,4 +1,5 @@
 /src/
 /pkg/
+/hyprland-canvas/
 /*.pkg.tar.*
 /hyprland-canvas-*.tar.*

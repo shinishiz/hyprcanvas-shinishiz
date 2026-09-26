@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] — 2026-09-26
+
+### Fixed
+
+- Arch PKGBUILD now includes the post-install message and installs the wheel under `/usr`.
+
 ## [1.4.1] — 2026-09-26
 
 ### Added
