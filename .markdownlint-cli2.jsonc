@@ -1,0 +1,16 @@
+{
+  // markdownlint-cli2 config — drydock's markdown style rules (docs/04).
+  // Run: npx --yes markdownlint-cli2 "**/*.md"   (excludes are handled by the caller)
+  // This file ships in every public repo so the style is identical across the fleet.
+  "config": {
+    "default": true,
+    "MD013": false,
+    "MD024": { "siblings_only": true },
+    "MD041": false,
+    "MD059": false,
+    "MD029": false,
+    // GitHub renders an uploaded demo only through a <video> tag. A demo must
+    // not be deleted to satisfy a style rule, so this one element is allowed.
+    "MD033": { "allowed_elements": ["video"] }
+  }
+}

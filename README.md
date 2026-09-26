@@ -24,7 +24,7 @@ Honest limits: no render-level zoom (windows move, nothing scales), no touchpad 
 ## Features
 
 | Feature | Keybind | Description |
-|---------|---------|-------------|
+| --- | --- | --- |
 | Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
 | Edge-scroll | SUPER+LMB | Drag a floating window toward the screen edge — camera follows (engages only for a confirmed drag of the window under the cursor) |
 | Navigate | SUPER+SHIFT+Arrows | Spatial jump to nearest window in direction (up/down/left/right), auto-pan to center |
@@ -38,6 +38,7 @@ Honest limits: no render-level zoom (windows move, nothing scales), no touchpad 
 Requires: Hyprland 0.55+ (Lua config with `hl.*` API), Python 3.12+, `uv` or `pipx`.
 
 **uv (recommended):**
+
 ```bash
 git clone https://github.com/zyrophix/hyprland-canvas.git
 cd hyprland-canvas
@@ -45,6 +46,7 @@ uv tool install .
 ```
 
 **pipx:**
+
 ```bash
 git clone https://github.com/zyrophix/hyprland-canvas.git
 cd hyprland-canvas
@@ -52,6 +54,7 @@ pipx install .
 ```
 
 **Run from source (no install):**
+
 ```bash
 git clone https://github.com/zyrophix/hyprland-canvas.git
 cd hyprland-canvas
@@ -74,7 +77,7 @@ canvas-ctl ping      # 2. check it answers
 
 Expected output:
 
-```
+```text
 PONG
 ```
 
@@ -191,7 +194,8 @@ at daemon startup with the exact offending keys listed on stderr.
 - `canvas/` — daemon source: `hypr.py` (IPC), `panning.py`,
   `navigation.py`, `ipc.py` (ctl server), `config.py`, `daemon.py`
 - `tests/` — mocked pytest suite, no live compositor needed (`uv run pytest`)
-- `docs/` — architecture and debugging notes beyond this README
+- `docs/` — [architecture.md](docs/architecture.md): process model, IPC, config load
+- `docs/` — [debugging.md](docs/debugging.md): logs, tracing, common failures
 - `config.yml` — ready-to-copy config template
 - `pyproject.toml` — package metadata, pytest/ruff/mypy config
 
