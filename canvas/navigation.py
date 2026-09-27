@@ -49,6 +49,10 @@ class Navigator:
         # Reapplied on the next ON so the canvas comes back where it was.
         self._canvas_mode_workspaces: dict[int, dict[str, dict[str, list[int]]]] = {}
         self._floating_geos: dict[int, dict[str, dict[str, list[int]]]] = {}
+        # workspace id -> addresses of windows that were converted to floating
+        # during this Canvas session (spawned during Canvas ON).
+        # These should be tiled again on Canvas OFF.
+        self._spawned_during_canvas: dict[int, set[str]] = {}
         raw = toggle_state.load()
         for ws, sections in raw.items():
             if isinstance(sections, list):
@@ -88,6 +92,50 @@ class Navigator:
                 floating={ws: len(s) for ws, s in self._floating_geos.items()},
                 preserve_geometry=self._preserve_geometry,
             )
+
+    def is_canvas_active(self, workspace_id: int) -> bool:
+        """Check if Canvas mode is active for a workspace."""
+        return workspace_id in self._canvas_mode_workspaces
+
+    def register_spawned_during_canvas(self, workspace_id: int, addr: str) -> None:
+        """Register a window that was converted to floating during Canvas ON."""
+        if workspace_id not in self._spawned_during_canvas:
+            self._spawned_during_canvas[workspace_id] = set()
+        self._spawned_during_canvas[workspace_id].add(addr)
+
+    def unregister_window(self, addr: str) -> None:
+        """Remove a window from all tracking state (closewindow event)."""
+        for ws_id in list(self._canvas_mode_workspaces):
+            self._canvas_mode_workspaces[ws_id].pop(addr, None)
+        for ws_id in list(self._floating_geos):
+            self._floating_geos[ws_id].pop(addr, None)
+        for ws_id in list(self._spawned_during_canvas):
+            self._spawned_during_canvas[ws_id].discard(addr)
+
+    def get_spawn_geometry(self, workspace_id: int) -> tuple[int, int] | None:
+        """Calculate spawn geometry for a new window during Canvas ON.
+
+        Returns (width, height) based on median of original tiled windows,
+        or None if no snapshot available.
+        """
+        snapshot = self._canvas_mode_workspaces.get(workspace_id, {})
+        if not snapshot:
+            return None
+        widths = []
+        heights = []
+        for geo in snapshot.values():
+            if isinstance(geo, dict) and geo:
+                size = geo.get("size")
+                if size and len(size) == 2:
+                    widths.append(size[0])
+                    heights.append(size[1])
+        if not widths or not heights:
+            return None
+        widths.sort()
+        heights.sort()
+        mid_w = widths[len(widths) // 2]
+        mid_h = heights[len(heights) // 2]
+        return mid_w, mid_h
 
     @staticmethod
     def _window_center(w: dict[str, Any]) -> tuple[int, int]:
@@ -275,6 +323,13 @@ class Navigator:
                     return "ERROR:SNAPSHOT_FAILED"
                 captured = snapshot_result
 
+            # Also include spawned-during-canvas windows in the tile operation
+            spawned = self._spawned_during_canvas.get(workspace_id, set())
+            all_to_tile = dict(snapshot)
+            for addr in spawned:
+                if addr not in all_to_tile:
+                    all_to_tile[addr] = {}
+
             next_modes = dict(self._canvas_mode_workspaces)
             next_modes.pop(workspace_id, None)
             next_floating = dict(self._floating_geos)
@@ -291,9 +346,9 @@ class Navigator:
                 log.warning("canvas OFF state save failed: %s", e)
                 return "ERROR:STATE_SAVE_FAILED"
 
-            if snapshot and not self._tile_windows(workspace_id, snapshot):
+            if all_to_tile and not self._tile_windows(workspace_id, all_to_tile):
                 compositor_rollback = self._set_snapshot_floating(
-                    workspace_id, snapshot, floating=True
+                    workspace_id, all_to_tile, floating=True
                 )
                 if captured:
                     compositor_rollback = (
@@ -315,6 +370,8 @@ class Navigator:
 
             self._canvas_mode_workspaces = next_modes
             self._floating_geos = next_floating
+            # Clear spawned tracking for this workspace
+            self._spawned_during_canvas.pop(workspace_id, None)
             if debug.enabled():
                 debug.dbg2(
                     "TOGGLE_OFF",
@@ -353,7 +410,12 @@ class Navigator:
 
         if not self._set_all_floating(workspace_id, floating=True):
             failure = "ERROR:FLOAT_FAILED"
-        elif not self._restore_floating_geos(workspace_id):
+        elif (
+            not self._restore_tiled_geometry_as_floating(workspace_id, tiled_snapshot)
+            or not self._restore_floating_geos(
+                workspace_id, exclude_addresses=set(tiled_snapshot.keys())
+            )
+        ):
             failure = "ERROR:GEOMETRY_RESTORE_FAILED"
         else:
             failure = ""
@@ -519,19 +581,108 @@ class Navigator:
             log.warning("snapshot floating geos failed: %s", e)
             return None
 
-    def _restore_floating_geos(self, workspace_id: int) -> bool:
-        """Move newly floated snapshot windows to stored floating geometry."""
+    def _restore_floating_geos(
+        self, workspace_id: int, exclude_addresses: set[str] | None = None
+    ) -> bool:
+        """Move newly floated snapshot windows to stored floating geometry.
+
+        Excludes addresses present in exclude_addresses (e.g., windows that
+        were tiled and are now handled by the tiled snapshot geometry).
+        """
         if not self._preserve_geometry:
             return True
         stored = self._floating_geos.get(workspace_id, {})
-        return self._apply_floating_geos(workspace_id, stored)
+        return self._apply_floating_geos(workspace_id, stored, exclude_addresses)
+
+    def _restore_tiled_geometry_as_floating(
+        self, workspace_id: int, tiled_snapshot: dict[str, dict[str, list[int]]]
+    ) -> bool:
+        """Apply tiled snapshot geometry to newly-floated windows.
+
+        Ensures windows that were tiled keep their exact visual geometry
+        when entering canvas mode, rather than inheriting old canvas geometry
+        or Hyprland's default floating placement.
+        """
+        if not self._preserve_geometry or not tiled_snapshot:
+            return True
+        try:
+            resp = self._ipc.send("j/clients")
+            clients: list[dict[str, Any]] = json.loads(resp)
+            live = {
+                str(w.get("address"))
+                for w in clients
+                if w.get("floating")
+                and isinstance(w.get("workspace"), dict)
+                and w.get("workspace", {}).get("id") == workspace_id
+            }
+        except Exception as e:
+            log.warning("restore tiled geometry failed: %s", e)
+            return False
+        targets: dict[str, dict[str, list[int]]] = {}
+        for addr in sorted(tiled_snapshot):
+            if addr not in live or not _VALID_ADDR.match(addr):
+                continue
+            geo = tiled_snapshot[addr]
+            if not isinstance(geo, dict) or not geo:
+                continue
+            try:
+                at = [int(geo.get("at", [0, 0])[0]), int(geo.get("at", [0, 0])[1])]
+                size = [int(geo.get("size", [0, 0])[0]), int(geo.get("size", [0, 0])[1])]
+            except Exception:
+                continue
+            if at == [0, 0] and size == [0, 0]:
+                continue
+            targets[addr] = {"at": at, "size": size}
+        if not targets:
+            return True
+        lines = [LUA_DISPATCH_HELPER, "local geos = {"]
+        for addr, geo in targets.items():
+            ax, ay = geo["at"]
+            sw, sh = geo["size"]
+            lines.append(f'  ["{addr}"] = {{at={{{ax},{ay}}}, size={{{sw},{sh}}}}},')
+        lines.append("}")
+        lines.append(
+            f"local ws = hl.get_windows({{ floating = true, "
+            f"workspace = {_safe_int(workspace_id, 'workspace_id')} }})"
+        )
+        lines.append("for _, w in ipairs(ws) do")
+        lines.append("  local g = geos[tostring(w.address)]")
+        lines.append("  if g then")
+        lines.append(
+            "    _canvas_dispatch(hl.dispatch(hl.dsp.window.resize({"
+            " x = g.size[1], y = g.size[2], relative = false, window = w })))"
+        )
+        lines.append(
+            "    _canvas_dispatch(hl.dispatch(hl.dsp.window.move({"
+            " x = g.at[1], y = g.at[2], relative = false, window = w })))"
+        )
+        lines.append("  end")
+        lines.append("end")
+        if debug.enabled():
+            debug.dbg2(
+                "TILED_GEOMETRY_RESTORE",
+                ws=workspace_id,
+                count=len(targets),
+                applied={a: targets[a] for a in sorted(targets)},
+            )
+        try:
+            self._ipc.eval_lua("\n".join(lines))
+            return True
+        except Exception as e:
+            log.warning("restore tiled geometry failed: %s", e)
+            return False
 
     def _apply_floating_geos(
-        self, workspace_id: int, stored: dict[str, dict[str, list[int]]]
+        self,
+        workspace_id: int,
+        stored: dict[str, dict[str, list[int]]],
+        exclude_addresses: set[str] | None = None,
     ) -> bool:
         """Apply known floating geometry to live windows on one workspace."""
         if not stored:
             return True
+        if exclude_addresses is None:
+            exclude_addresses = set()
         try:
             resp = self._ipc.send("j/clients")
             clients: list[dict[str, Any]] = json.loads(resp)
@@ -547,6 +698,8 @@ class Navigator:
             return False
         targets: dict[str, dict[str, list[int]]] = {}
         for addr in sorted(stored):
+            if addr in exclude_addresses:
+                continue
             if addr not in live or not _VALID_ADDR.match(addr):
                 continue
             geo = stored[addr]

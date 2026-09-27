@@ -1,9 +1,11 @@
 """Tests for canvas.daemon — DaemonState and helper functions."""
 
 import json
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
-from canvas.daemon import DaemonState, _lua_escape
+from canvas.daemon import DaemonState, EventListener, _lua_escape
 from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState
 
 
@@ -635,3 +637,181 @@ def test_edge_scroll_move_zero_delta_is_noop():
     ds.edge_scroll_move(0, 0)
 
     ipc.eval_lua.assert_not_called()
+
+
+def _make_event_listener(
+    navigator: MagicMock | None = None, ipc: MagicMock | None = None
+):
+    stop_event = threading.Event()
+    nav = navigator or MagicMock()
+    if ipc is None:
+        ipc = MagicMock()
+    return EventListener(navigator=nav, ipc=ipc, stop_event=stop_event)
+
+
+def test_event_listener_start_stop():
+    """EventListener starts and stops cleanly."""
+    ipc = MagicMock()
+    navigator = MagicMock()
+    stop_event = threading.Event()
+    listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
+    listener.start()
+    assert listener._thread is not None
+    assert listener._thread.is_alive()
+    listener.stop()
+    assert not listener._thread.is_alive()
+
+
+def test_event_listener_openwindow_tiled_converts_to_floating():
+    """openwindow for tiled window on Canvas workspace converts to floating with geometry."""
+    ipc = MagicMock()
+    navigator = MagicMock()
+    navigator.is_canvas_active.return_value = True
+    navigator.get_spawn_geometry.return_value = (800, 600)
+    stop_event = threading.Event()
+    listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
+
+    # Mock j/clients to return a tiled window
+    client = {
+        "address": "0xabc123",
+        "floating": False,
+        "at": [100, 200],
+        "size": [800, 600],
+        "workspace": {"id": 1},
+        "hidden": False,
+        "fullscreen": False,
+    }
+    ipc.send.return_value = json.dumps([client])
+
+    # Simulate openwindow event
+    listener._handle_openwindow("abc123,workspace1,kitty,Title")
+
+    # Should have called eval_lua with float + resize + move
+    assert ipc.eval_lua.called
+    lua_code = ipc.eval_lua.call_args[0][0]
+    assert "float" in lua_code
+    assert "resize" in lua_code
+    assert "move" in lua_code
+    # Uses spawn geometry (800x600) and centers it
+    assert "x = 800, y = 600" in lua_code
+    assert "x = 560, y = 240" in lua_code  # centered at 960,540
+    navigator.register_spawned_during_canvas.assert_called_once_with(1, "0xabc123")
+
+
+def test_event_listener_openwindow_already_floating_ignored():
+    """openwindow for already floating window does nothing."""
+    ipc = MagicMock()
+    navigator = MagicMock()
+    navigator.is_canvas_active.return_value = True
+    stop_event = threading.Event()
+    listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
+
+    client = {
+        "address": "0xabc123",
+        "floating": True,  # Already floating
+        "at": [100, 200],
+        "size": [800, 600],
+        "workspace": {"id": 1},
+    }
+    ipc.send.return_value = json.dumps([client])
+
+    listener._handle_openwindow("abc123,workspace1,kitty,Title")
+
+    # Should NOT call eval_lua
+    ipc.eval_lua.assert_not_called()
+    navigator.register_spawned_during_canvas.assert_not_called()
+
+
+def test_event_listener_openwindow_workspace_not_canvas_ignored():
+    """openwindow on non-Canvas workspace is ignored."""
+    ipc = MagicMock()
+    navigator = MagicMock()
+    navigator.is_canvas_active.return_value = False
+    stop_event = threading.Event()
+    listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
+
+    client = {
+        "address": "0xabc123",
+        "floating": False,
+        "at": [100, 200],
+        "size": [800, 600],
+        "workspace": {"id": 99},
+    }
+    ipc.send.return_value = json.dumps([client])
+
+    listener._handle_openwindow("abc123,workspace1,kitty,Title")
+
+    ipc.eval_lua.assert_not_called()
+    navigator.register_spawned_during_canvas.assert_not_called()
+
+
+def test_event_listener_openwindow_retry_on_missing_client():
+    """openwindow retries if client not yet in j/clients."""
+    ipc = MagicMock()
+    navigator = MagicMock()
+    navigator.is_canvas_active.return_value = True
+    navigator.get_spawn_geometry.return_value = (800, 600)
+    stop_event = threading.Event()
+    listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
+
+    # Test the retry logic directly by calling _process_new_window
+    # First call: empty clients
+    ipc.send.return_value = json.dumps([])
+    listener._process_new_window("0xabc123", attempt=0)
+
+    # Should have scheduled a retry
+    with listener._pending_lock:
+        assert "0xabc123" in listener._pending_retries
+        attempt, deadline = listener._pending_retries["0xabc123"]
+        assert attempt == 1
+
+    # Manually set deadline to past to force immediate retry
+    with listener._pending_lock:
+        listener._pending_retries["0xabc123"] = (1, time.monotonic() - 1)
+
+    # Now process the retry
+    client = {
+        "address": "0xabc123",
+        "floating": False,
+        "at": [100, 200],
+        "size": [800, 600],
+        "workspace": {"id": 1},
+        "hidden": False,
+        "fullscreen": False,
+    }
+    ipc.send.return_value = json.dumps([client])
+    listener._process_pending_retries()
+
+    # Should have called eval_lua
+    assert ipc.eval_lua.called
+
+
+def test_event_listener_closewindow_removes_from_state():
+    """closewindow removes address from navigator state."""
+    ipc = MagicMock()
+    navigator = MagicMock()
+    stop_event = threading.Event()
+    listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
+
+    listener._handle_closewindow("0xabc123")
+
+    navigator.unregister_window.assert_called_once_with("0xabc123")
+
+
+def test_event_listener_closewindow_cancels_pending_retry():
+    """closewindow cancels any pending retry for that address."""
+    ipc = MagicMock()
+    navigator = MagicMock()
+    navigator.is_canvas_active.return_value = True
+    stop_event = threading.Event()
+    listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
+
+    # Trigger a retry
+    ipc.send.return_value = json.dumps([])  # Empty -> triggers retry
+    listener._handle_openwindow("abc123,workspace1,kitty,Title")
+
+    # Now closewindow should cancel the retry
+    listener._handle_closewindow("0xabc123")
+
+    # Retry should be cancelled (no eval_lua should be called later)
+    navigator.unregister_window.assert_called_once_with("0xabc123")

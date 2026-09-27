@@ -312,7 +312,11 @@ def test_canvas_toggle_off_captures_floating_geos():
 
 
 def test_canvas_toggle_on_restores_floating_geos():
-    """ON moves newly floated windows back to stored floating positions."""
+    """ON moves newly floated windows back to stored floating positions.
+
+    Tiled snapshot geometry takes precedence over old floating_geos for
+    windows that were tiled before Canvas ON.
+    """
     tiled = [
         _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
     ]
@@ -326,7 +330,13 @@ def test_canvas_toggle_on_restores_floating_geos():
         }
     }
     ipc = MagicMock()
-    ipc.send.side_effect = [json.dumps(tiled), json.dumps(floated)]
+    # Multiple j/clients: snapshot_tiled, restore_tiled, restore_floating (x2)
+    ipc.send.side_effect = [
+        json.dumps(tiled),
+        json.dumps(floated),
+        json.dumps(floated),
+        json.dumps(floated),
+    ]
 
     with (
         patch("canvas.navigation.toggle_state.load", return_value=stored),
@@ -336,15 +346,16 @@ def test_canvas_toggle_on_restores_floating_geos():
         with patch.object(nav, "_get_active_workspace_id", return_value=1):
             assert nav.canvas_toggle() == "CANVAS_ON"
 
-        assert ipc.eval_lua.call_count == 2
-        restore_lua = ipc.eval_lua.call_args_list[1][0][0]
-        assert "at={500,600}" in restore_lua
-        assert "size={400,300}" in restore_lua
-        assert "hl.dsp.window.move" in restore_lua
-        assert "hl.dsp.window.resize" in restore_lua
-        assert "x = g.size[1], y = g.size[2]" in restore_lua
-        assert "width = g.size[1]" not in restore_lua
-        assert "height = g.size[2]" not in restore_lua
+    assert ipc.eval_lua.call_count == 2
+    restore_lua = ipc.eval_lua.call_args_list[1][0][0]
+    # Tiled snapshot geometry (0,0,100,100) should win over old floating_geos (500,600,400,300)
+    assert "at={0,0}" in restore_lua
+    assert "size={100,100}" in restore_lua
+    assert "hl.dsp.window.move" in restore_lua
+    assert "hl.dsp.window.resize" in restore_lua
+    assert "x = g.size[1], y = g.size[2]" in restore_lua
+    assert "width = g.size[1]" not in restore_lua
+    assert "height = g.size[2]" not in restore_lua
 
 
 def test_canvas_toggle_on_without_stored_geos_skips_restore():
@@ -408,3 +419,132 @@ def test_preserve_geometry_false_skips_capture_and_restore():
             assert nav.canvas_toggle() == "CANVAS_OFF"
 
         assert nav._floating_geos == {}
+
+
+def test_is_canvas_active():
+    """is_canvas_active returns True only for workspaces with active canvas."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+    nav._canvas_mode_workspaces = {1: {"0x1": {}}, 2: {"0x2": {}}}
+
+    assert nav.is_canvas_active(1) is True
+    assert nav.is_canvas_active(2) is True
+    assert nav.is_canvas_active(3) is False
+    assert nav.is_canvas_active(999) is False
+
+
+def test_register_spawned_during_canvas():
+    """register_spawned_during_canvas tracks addresses per workspace."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+
+    nav.register_spawned_during_canvas(1, "0x1")
+    nav.register_spawned_during_canvas(1, "0x2")
+    nav.register_spawned_during_canvas(2, "0x3")
+
+    assert nav._spawned_during_canvas[1] == {"0x1", "0x2"}
+    assert nav._spawned_during_canvas[2] == {"0x3"}
+
+
+def test_unregister_window_removes_from_all_state():
+    """unregister_window removes address from all tracking dicts."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+    nav._canvas_mode_workspaces = {1: {"0x1": {}, "0x2": {}}}
+    nav._floating_geos = {1: {"0x1": {"at": [0, 0], "size": [100, 100]}}}
+    nav._spawned_during_canvas = {1: {"0x1", "0x2"}}
+
+    nav.unregister_window("0x1")
+
+    assert "0x1" not in nav._canvas_mode_workspaces[1]
+    assert "0x1" not in nav._floating_geos[1]
+    assert "0x1" not in nav._spawned_during_canvas[1]
+    assert "0x2" in nav._canvas_mode_workspaces[1]  # Other address preserved
+
+
+def test_unregister_window_safe_on_missing():
+    """unregister_window does not error if address not present."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+    nav.unregister_window("0xnonexistent")  # Should not raise
+
+
+def test_get_spawn_geometry_from_snapshot():
+    """get_spawn_geometry returns median size from tiled snapshot."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+    # Snapshot with 3 windows: sizes 941x506, 941x1026, 941x506
+    # Median width = 941, median height = 506
+    nav._canvas_mode_workspaces = {
+        1: {
+            "0x1": {"at": [10, 20], "size": [941, 506]},
+            "0x2": {"at": [960, 20], "size": [941, 1026]},
+            "0x3": {"at": [10, 560], "size": [941, 506]},
+        }
+    }
+    result = nav.get_spawn_geometry(1)
+    assert result == (941, 506)
+
+
+def test_get_spawn_geometry_empty_snapshot():
+    """get_spawn_geometry returns None for empty snapshot."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+    nav._canvas_mode_workspaces = {1: {}}
+    assert nav.get_spawn_geometry(1) is None
+    assert nav.get_spawn_geometry(999) is None
+
+
+def test_get_spawn_geometry_with_invalid_entries():
+    """get_spawn_geometry skips invalid snapshot entries."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+    nav._canvas_mode_workspaces = {
+        1: {
+            "0x1": {},  # empty
+            "0x2": {"at": [0, 0]},  # missing size
+            "0x3": {"size": [800, 600]},  # missing at
+            "0x4": {"at": [0, 0], "size": [1000, 700]},  # valid
+        }
+    }
+    result = nav.get_spawn_geometry(1)
+    assert result == (1000, 700)
+
+
+def test_canvas_toggle_off_includes_spawned_windows():
+    """Canvas OFF tiles both original tiled snapshot and spawned-during-canvas windows."""
+    tiled = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
+    ]
+    during = [
+        _make_window("kitty", "0x1", 10, 10, 100, 100, floating=True),
+        _make_window("kitty", "0x2", 200, 200, 100, 100, floating=True),
+    ]
+    # Multiple j/clients calls: snapshot_tiled, after float (restore_tiled),
+    # after float (restore_floating), OFF snapshot_floating
+    ipc = MagicMock()
+    ipc.send.side_effect = [
+        json.dumps(tiled),
+        json.dumps(during),
+        json.dumps(during),
+        json.dumps(during),
+    ]
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            # Canvas ON
+            assert nav.canvas_toggle() == "CANVAS_ON"
+            # Simulate spawned window
+            nav.register_spawned_during_canvas(1, "0x2")
+
+            # Canvas OFF
+            assert nav.canvas_toggle() == "CANVAS_OFF"
+
+    # The OFF path calls _tile_windows with combined snapshot
+    # We verify that both addresses were targeted by checking the Lua
+    off_tile_lua = None
+    for call in ipc.eval_lua.call_args_list:
+        lua = call[0][0]
+        if "float" in lua and "action" in lua and "toggle" in lua and "order" in lua:
+            off_tile_lua = lua
+            break
+    assert off_tile_lua is not None
+    assert "0x1" in off_tile_lua
+    assert "0x2" in off_tile_lua

@@ -1,9 +1,11 @@
 """Canvas daemon — main loop wiring all modules together."""
 
+import contextlib
 import json
 import logging
 import re
 import signal
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -11,7 +13,13 @@ from typing import Any
 
 from canvas import debug
 from canvas.config import load
-from canvas.hypr import LUA_DISPATCH_HELPER, HyprIPC, get_cursor_pos
+from canvas.hypr import (
+    LUA_DISPATCH_HELPER,
+    HyprIPC,
+    _hypr_socket2_path,
+    _normalize_address,
+    get_cursor_pos,
+)
 from canvas.ipc import IpcServer, acquire_singleton
 from canvas.navigation import Navigator
 from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState, cursor_poller
@@ -21,9 +29,234 @@ log = logging.getLogger("canvas")
 _VALID_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
 
+_MAX_OPENWINDOW_RETRIES = 3
+_OPENWINDOW_RETRY_DELAY = 0.05  # 50ms
+
+
 def _lua_escape(s: str) -> str:
     """Escape a string for safe interpolation into a Lua double-quoted literal."""
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+
+
+class EventListener:
+    """Listens to Hyprland .socket2.sock for window events."""
+
+    def __init__(
+        self,
+        navigator: Navigator,
+        ipc: HyprIPC,
+        stop_event: threading.Event,
+    ) -> None:
+        self._navigator = navigator
+        self._ipc = ipc
+        self._stop_event = stop_event
+        self._thread: threading.Thread | None = None
+        self._pending_retries: dict[str, tuple[int, float]] = {}  # addr -> (attempt, deadline)
+        self._pending_lock = threading.Lock()
+        self._sock: socket.socket | None = None
+
+    def start(self) -> None:
+        """Start the event listener thread."""
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        log.debug("EventListener started")
+
+    def stop(self) -> None:
+        """Stop the event listener thread."""
+        self._stop_event.set()
+        if self._sock:
+            with contextlib.suppress(Exception):
+                self._sock.close()
+        if self._thread:
+            self._thread.join(timeout=1)
+        log.debug("EventListener stopped")
+
+    def _run(self) -> None:
+        """Main event loop."""
+        sock_path = _hypr_socket2_path()
+        try:
+            self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._sock.settimeout(1.0)
+            self._sock.connect(sock_path)
+        except Exception as e:
+            log.warning("EventListener failed to connect to %s: %s", sock_path, e)
+            return
+
+        buffer = ""
+        while not self._stop_event.is_set():
+            # Process pending retries
+            self._process_pending_retries()
+
+            try:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk.decode("utf-8", errors="replace")
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    self._handle_line(line.strip())
+            except TimeoutError:
+                continue
+            except OSError as e:
+                if not self._stop_event.is_set():
+                    log.debug("EventListener socket error: %s", e)
+                break
+
+        if self._sock:
+            self._sock.close()
+            self._sock = None
+
+    def _handle_line(self, line: str) -> None:
+        """Handle a single event line from socket2."""
+        if not line or ">>" not in line:
+            return
+        event, payload = line.split(">>", 1)
+        event = event.strip()
+        payload = payload.strip()
+
+        if event == "openwindow":
+            self._handle_openwindow(payload)
+        elif event == "closewindow":
+            self._handle_closewindow(payload)
+
+    def _handle_openwindow(self, payload: str) -> None:
+        """Handle openwindow event: ADDRESS,WORKSPACENAME,CLASS,TITLE"""
+        parts = payload.split(",", 3)
+        if len(parts) < 4:
+            return
+
+        raw_addr = parts[0]
+        addr = _normalize_address(raw_addr)
+
+        # Look up the client in j/clients to get workspace ID and geometry
+        self._process_new_window(addr, attempt=0)
+
+    def _process_new_window(self, addr: str, attempt: int) -> None:
+        """Process a newly opened window, with retry logic."""
+        try:
+            resp = self._ipc.send("j/clients")
+            clients = json.loads(resp)
+        except Exception as e:
+            log.debug("openwindow: j/clients failed: %s", e)
+            self._schedule_retry(addr, attempt)
+            return
+
+        client = next(
+            (c for c in clients if _normalize_address(c.get("address", "")) == addr),
+            None,
+        )
+        if not client:
+            self._schedule_retry(addr, attempt)
+            return
+
+        # Check if client has valid geometry
+        at = client.get("at")
+        size = client.get("size")
+        if not at or not size or len(at) < 2 or len(size) < 2:
+            self._schedule_retry(addr, attempt)
+            return
+
+        floating = client.get("floating", False)
+        if floating:
+            # Already floating, nothing to do
+            return
+
+        ws_info = client.get("workspace")
+        if not isinstance(ws_info, dict):
+            return
+        ws_id = ws_info.get("id")
+        if ws_id is None:
+            return
+
+        # Check if this workspace has Canvas active
+        if not self._navigator.is_canvas_active(ws_id):
+            return
+
+        # Check if hidden/fullscreen/pinned - skip if so
+        if client.get("hidden") or client.get("fullscreen"):
+            return
+
+        # Get spawn geometry from tiled snapshot (median size)
+        spawn_geo = self._navigator.get_spawn_geometry(ws_id)
+        if spawn_geo is not None:
+            w, h = spawn_geo
+        else:
+            # Fallback: use the window's current size (capped to reasonable max)
+            w, h = int(size[0]), int(size[1])
+            max_w, max_h = 1200, 800
+            if w > max_w:
+                w = max_w
+            if h > max_h:
+                h = max_h
+
+        # Position: center of viewport (use reasonable default)
+        # Since we avoid j/monitors query, use a sensible default center
+        # that works for common resolutions (1920x1080 -> 960, 540)
+        x, y = 960 - w // 2, 540 - h // 2
+
+        lua = (
+            f"{LUA_DISPATCH_HELPER}\n"
+            f"local ws = hl.get_windows({{ workspace = {ws_id} }})\n"
+            f"for _, win in ipairs(ws) do\n"
+            f'  if tostring(win.address) == "{addr}" then\n'
+            f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.float("
+            f"{{ action = \"toggle\", window = win }})))\n"
+            f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.resize("
+            f"{{ x = {w}, y = {h}, relative = false, window = win }})))\n"
+            f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.move("
+            f"{{ x = {x}, y = {y}, relative = false, window = win }})))\n"
+            f"    break\n"
+            f"  end\n"
+            f"end\n"
+        )
+        try:
+            self._ipc.eval_lua(lua)
+        except Exception as e:
+            log.warning("openwindow: failed to float new window %s: %s", addr, e)
+            return
+
+        # Register as spawned during canvas
+        self._navigator.register_spawned_during_canvas(ws_id, addr)
+
+    def _schedule_retry(self, addr: str, attempt: int) -> None:
+        """Schedule a retry for openwindow processing."""
+        if attempt >= _MAX_OPENWINDOW_RETRIES:
+            log.debug("openwindow: max retries reached for %s", addr)
+            with self._pending_lock:
+                self._pending_retries.pop(addr, None)
+            return
+
+        with self._pending_lock:
+            self._pending_retries[addr] = (attempt + 1, time.monotonic() + _OPENWINDOW_RETRY_DELAY)
+
+    def _process_pending_retries(self) -> None:
+        """Process any pending openwindow retries."""
+        now = time.monotonic()
+        with self._pending_lock:
+            due = [
+                (addr, _attempt)
+                for addr, (_attempt, deadline) in self._pending_retries.items()
+                if now >= deadline
+            ]
+            for addr, _attempt in due:
+                self._pending_retries.pop(addr, None)
+
+        for addr, _attempt in due:
+            self._process_new_window(addr, _attempt)
+
+    def _handle_closewindow(self, payload: str) -> None:
+        """Handle closewindow event: ADDRESS"""
+        raw_addr = payload.strip()
+        if not raw_addr:
+            return
+        addr = _normalize_address(raw_addr)
+
+        # Remove from pending retries
+        with self._pending_lock:
+            self._pending_retries.pop(addr, None)
+
+        # Remove from navigator state
+        self._navigator.unregister_window(addr)
 
 
 class DaemonState:
@@ -573,6 +806,9 @@ def run() -> None:
     )
     cursor_thread.start()
 
+    event_listener = EventListener(navigator, ipc, stop_event)
+    event_listener.start()
+
     log.info("ready — SUPER+SHIFT+LMB to pan, SUPER+LMB to edge-scroll")
 
     target_interval = 1.0 / 60.0
@@ -619,6 +855,7 @@ def run() -> None:
         log.info("shutting down: %s", exc)
     finally:
         stop_event.set()
+        event_listener.stop()
         ipc_server.stop()
         cursor_thread.join(timeout=1)
         ipc_thread.join(timeout=1)

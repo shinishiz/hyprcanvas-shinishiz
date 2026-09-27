@@ -50,6 +50,33 @@ def _hypr_socket_path() -> str:
     raise FileNotFoundError("Hyprland socket not found")
 
 
+def _hypr_socket2_path() -> str:
+    """Resolve the Hyprland event socket (.socket2.sock) path."""
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    uid = os.getuid()
+    base = f"/run/user/{uid}/hypr"
+    if sig and os.path.exists(f"{base}/{sig}/.socket2.sock"):
+        return f"{base}/{sig}/.socket2.sock"
+    if os.path.isdir(base):
+        for d in sorted(os.listdir(base)):
+            sock = f"{base}/{d}/.socket2.sock"
+            if os.path.exists(sock):
+                return sock
+    raise FileNotFoundError("Hyprland event socket not found")
+
+
+def _normalize_address(addr: str) -> str:
+    """Normalize window address for comparison.
+
+    Hyprland uses '0x...' format in j/clients and IPC.
+    socket2 events may omit the '0x' prefix.
+    """
+    addr = addr.strip().lower()
+    if not addr.startswith("0x"):
+        addr = "0x" + addr
+    return addr
+
+
 class HyprIPC:
     """Thread-safe one-shot Hyprland IPC client.
 
