@@ -71,6 +71,16 @@ def _send(cmd: str) -> None:
     print(response)
 
 
+def _positive_workspace_id(value: str) -> int:
+    try:
+        workspace_id = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("workspace_id must be a positive integer") from exc
+    if workspace_id <= 0:
+        raise argparse.ArgumentTypeError("workspace_id must be a positive integer")
+    return workspace_id
+
+
 def ctl_main(argv: list[str] | None = None) -> None:
     """Entry point for `canvas-ctl`."""
     parser = argparse.ArgumentParser(
@@ -80,11 +90,16 @@ def ctl_main(argv: list[str] | None = None) -> None:
     parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     sub = parser.add_subparsers(dest="command", metavar="<command>", required=True)
     for name, help_text in _COMMANDS:
-        sub.add_parser(name, help=help_text).set_defaults(
-            func=_send, cmd=name.upper().replace("-", "_")
-        )
+        command_parser = sub.add_parser(name, help=help_text)
+        if name in {"canvas-toggle", "canvas-toggle-all"}:
+            command_parser.add_argument("workspace_id", nargs="?", type=_positive_workspace_id)
+        command_parser.set_defaults(func=_send, cmd=name.upper().replace("-", "_"))
     args = parser.parse_args(argv)
-    args.func(args.cmd)
+    cmd = args.cmd
+    workspace_id = getattr(args, "workspace_id", None)
+    if workspace_id is not None:
+        cmd = f"{cmd} {workspace_id}"
+    args.func(cmd)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ import signal
 import socket
 import threading
 import time
-from collections.abc import Callable
 from typing import Any
 
 from canvas import debug
@@ -361,10 +360,28 @@ class DaemonState:
     def handle_ipc(self, cmd: str) -> str:
         """Process an IPC command, return response string."""
         with self._operation_lock:
-            handler_name = self._IPC_DISPATCH.get(cmd)
+            command = cmd
+            workspace_id: int | None = None
+            parts = cmd.split()
+            if parts and parts[0] in {"CANVAS_TOGGLE", "CANVAS_TOGGLE_ALL"}:
+                command = parts[0]
+                if len(parts) > 2:
+                    return "ERROR:INVALID_WORKSPACE"
+                if len(parts) == 2:
+                    try:
+                        workspace_id = int(parts[1])
+                    except ValueError:
+                        return "ERROR:INVALID_WORKSPACE"
+                    if workspace_id <= 0:
+                        return "ERROR:INVALID_WORKSPACE"
+
+            handler_name = self._IPC_DISPATCH.get(command)
             if handler_name is not None:
-                handler: Callable[[], str] = getattr(self, handler_name)
-                result = handler()
+                handler = getattr(self, handler_name)
+                if command in {"CANVAS_TOGGLE", "CANVAS_TOGGLE_ALL"}:
+                    result = handler(workspace_id)
+                else:
+                    result = handler()
                 debug.dbg("CMD", cmd=cmd, result=result)
                 return result
             debug.dbg("CMD", cmd=cmd, result="UNKNOWN")
@@ -636,13 +653,13 @@ class DaemonState:
             self.edge_scroll.set_viewport(1.0, 0.0, 0.0)
             debug.dbg2("MODE_SWITCH", to=to, stopped="edge")
 
-    def _handle_canvas_toggle(self) -> str:
+    def _handle_canvas_toggle(self, workspace_id: int | None = None) -> str:
         self._stop_competing_modes("canvas-toggle")
-        return self.navigator.canvas_toggle()
+        return self.navigator.canvas_toggle(workspace_id)
 
-    def _handle_canvas_toggle_all(self) -> str:
+    def _handle_canvas_toggle_all(self, workspace_id: int | None = None) -> str:
         self._stop_competing_modes("canvas-toggle")
-        return self.navigator.canvas_toggle_all()
+        return self.navigator.canvas_toggle_all(workspace_id)
 
     def _handle_canvas_toggle_single(self) -> str:
         self._stop_competing_modes("canvas-toggle")

@@ -47,6 +47,39 @@ def test_ctl_main_center_cursor_command():
         mock_send.assert_called_with("CENTER_CURSOR")
 
 
+def test_ctl_main_canvas_toggle_without_workspace_preserves_legacy_command():
+    with patch("canvas.ipc.send_command", return_value="CANVAS_ON") as mock_send:
+        ctl_main(["canvas-toggle"])
+        mock_send.assert_called_once_with("CANVAS_TOGGLE")
+
+
+def test_ctl_main_canvas_toggle_with_workspace_sends_explicit_target():
+    with patch("canvas.ipc.send_command", return_value="CANVAS_ON") as mock_send:
+        ctl_main(["canvas-toggle", "2"])
+        mock_send.assert_called_once_with("CANVAS_TOGGLE 2")
+
+
+def test_ctl_main_canvas_toggle_all_accepts_optional_workspace():
+    with patch("canvas.ipc.send_command", return_value="CANVAS_ON") as mock_send:
+        ctl_main(["canvas-toggle-all"])
+        mock_send.assert_called_once_with("CANVAS_TOGGLE_ALL")
+
+    with patch("canvas.ipc.send_command", return_value="CANVAS_ON") as mock_send:
+        ctl_main(["canvas-toggle-all", "4"])
+        mock_send.assert_called_once_with("CANVAS_TOGGLE_ALL 4")
+
+
+def test_ctl_main_canvas_toggle_rejects_invalid_workspace_without_ipc():
+    for value in ("0", "-1", "abc"):
+        with patch("canvas.ipc.send_command") as mock_send:
+            try:
+                ctl_main(["canvas-toggle", value])
+                raise AssertionError("should have exited")
+            except SystemExit as exc:
+                assert exc.code == 2
+            mock_send.assert_not_called()
+
+
 def test_ctl_main_zoom_commands():
     for command, expected in [
         ("zoom-in", "ZOOM_IN"),

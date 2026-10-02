@@ -47,6 +47,84 @@ def test_get_active_workspace_id_error():
     assert nav._get_active_workspace_id() is None
 
 
+def test_canvas_toggle_wrapper_forwards_explicit_workspace():
+    nav = _make_nav()
+    with patch.object(nav, "canvas_toggle_all", return_value="CANVAS_OFF") as toggle_all:
+        assert nav.canvas_toggle(2) == "CANVAS_OFF"
+    toggle_all.assert_called_once_with(2)
+
+
+def test_canvas_toggle_explicit_workspace_on_ignores_active_workspace():
+    stored = {
+        3: {
+            "active": False,
+            "tiled": {},
+            "floating": {"0x3": {"at": [30, 30], "size": [300, 300]}},
+        }
+    }
+    tiled = {"0x2": {"at": [20, 20], "size": [200, 200]}}
+    ipc = MagicMock()
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=stored),
+        patch("canvas.navigation.toggle_state.save") as save,
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with (
+            patch.object(nav, "_get_active_workspace_id", return_value=3) as active_workspace,
+            patch.object(nav, "_snapshot_tiled_windows", return_value=tiled),
+            patch.object(nav, "_set_all_floating", return_value=True) as set_floating,
+            patch.object(nav, "_restore_tiled_geometry_as_floating", return_value=True),
+            patch.object(nav, "_restore_floating_geos", return_value=True),
+        ):
+            assert nav.canvas_toggle_all(2) == "CANVAS_ON"
+
+    active_workspace.assert_not_called()
+    set_floating.assert_called_once_with(2, floating=True)
+    ipc.set_canvas_viewport.assert_called_once_with("enable", 2)
+    persisted = save.call_args.args[0]
+    assert persisted[2]["active"] is True
+    assert persisted[3]["active"] is False
+    assert nav._canvas_mode_workspaces == {2: tiled}
+
+
+def test_canvas_toggle_explicit_workspace_off_ignores_active_workspace():
+    stored = {
+        2: {
+            "active": True,
+            "tiled": {"0x2": {"at": [20, 20], "size": [200, 200]}},
+            "floating": {},
+        },
+        3: {
+            "active": False,
+            "tiled": {},
+            "floating": {"0x3": {"at": [30, 30], "size": [300, 300]}},
+        },
+    }
+    ipc = MagicMock()
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=stored),
+        patch("canvas.navigation.toggle_state.save") as save,
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with (
+            patch.object(nav, "_get_active_workspace_id", return_value=3) as active_workspace,
+            patch.object(nav, "_snapshot_floating_geos", return_value={}),
+            patch.object(nav, "_tile_windows", return_value=True) as tile_windows,
+        ):
+            assert nav.canvas_toggle_all(2) == "CANVAS_OFF"
+
+    active_workspace.assert_not_called()
+    tile_windows.assert_called_once()
+    assert tile_windows.call_args.args[0] == 2
+    ipc.set_canvas_viewport.assert_called_once_with("disable", 2)
+    persisted = save.call_args.args[0]
+    assert 2 not in persisted
+    assert persisted[3]["active"] is False
+    assert 2 not in nav._canvas_mode_workspaces
+
+
 def test_get_floating_windows():
     ipc = MagicMock()
     w1 = _make_window("a", "0x1", 10, 20, 400, 300, floating=True, workspace_id=1)

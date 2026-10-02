@@ -62,6 +62,44 @@ def test_handle_ipc_toggle():
     assert ds.panning.inverted is True
 
 
+def test_handle_ipc_canvas_toggle_legacy_and_explicit_workspace():
+    ds = _make_daemon_state()
+    ds.navigator.canvas_toggle.return_value = "CANVAS_OFF"
+
+    assert ds.handle_ipc("CANVAS_TOGGLE") == "CANVAS_OFF"
+    ds.navigator.canvas_toggle.assert_called_once_with(None)
+
+    ds.navigator.canvas_toggle.reset_mock()
+    assert ds.handle_ipc("CANVAS_TOGGLE 2") == "CANVAS_OFF"
+    ds.navigator.canvas_toggle.assert_called_once_with(2)
+
+
+def test_handle_ipc_canvas_toggle_all_legacy_and_explicit_workspace():
+    ds = _make_daemon_state()
+    ds.navigator.canvas_toggle_all.return_value = "CANVAS_ON"
+
+    assert ds.handle_ipc("CANVAS_TOGGLE_ALL") == "CANVAS_ON"
+    ds.navigator.canvas_toggle_all.assert_called_once_with(None)
+
+    ds.navigator.canvas_toggle_all.reset_mock()
+    assert ds.handle_ipc("CANVAS_TOGGLE_ALL 2") == "CANVAS_ON"
+    ds.navigator.canvas_toggle_all.assert_called_once_with(2)
+
+
+def test_handle_ipc_canvas_toggle_rejects_invalid_workspace():
+    ds = _make_daemon_state()
+
+    for cmd in (
+        "CANVAS_TOGGLE 0",
+        "CANVAS_TOGGLE -1",
+        "CANVAS_TOGGLE abc",
+        "CANVAS_TOGGLE 2 extra",
+    ):
+        assert ds.handle_ipc(cmd) == "ERROR:INVALID_WORKSPACE"
+
+    ds.navigator.canvas_toggle.assert_not_called()
+
+
 def test_handle_ipc_nav():
     """NAV_LEFT/NAV_RIGHT delegates to navigator."""
     ds = _make_daemon_state()

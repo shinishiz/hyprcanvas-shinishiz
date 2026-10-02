@@ -316,12 +316,13 @@ class Navigator:
             }
         toggle_state.save(state)
 
-    def canvas_toggle(self) -> str:
+    def canvas_toggle(self, workspace_id: int | None = None) -> str:
         # Backward-compat alias — single word `canvas-toggle` still means "all"
-        return self.canvas_toggle_all()
+        return self.canvas_toggle_all(workspace_id)
 
-    def canvas_toggle_all(self) -> str:
-        workspace_id = self._get_active_workspace_id()
+    def canvas_toggle_all(self, workspace_id: int | None = None) -> str:
+        if workspace_id is None:
+            workspace_id = self._get_active_workspace_id()
         if workspace_id is None:
             return "ERROR:NO_WORKSPACE"
 
