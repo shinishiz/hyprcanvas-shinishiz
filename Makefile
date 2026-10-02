@@ -3,7 +3,7 @@ PLUGIN_NAME = hypr-canvas
 CXX = g++
 CXXFLAGS = -shared -fPIC -std=c++2b -O2
 CXXFLAGS += $(shell pkg-config --cflags hyprland pixman-1 libdrm)
-INCLUDES = -I/usr/include/hyprland
+INCLUDES =
 
 SRC = src/main.cpp src/canvas.cpp
 OUT = $(PLUGIN_NAME).so
