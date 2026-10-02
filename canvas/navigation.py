@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import re
 import time
 from typing import Any
@@ -1001,8 +1002,8 @@ class Navigator:
         self,
         floating_windows: list[dict[str, Any]],
         target_addr: Any,
-        center_x: int,
-        center_y: int,
+        center_x: float,
+        center_y: float,
         workspace_id: int | None = None,
     ) -> bool:
         """Pan the workspace's floating windows so the target centers on monitor."""
@@ -1101,8 +1102,12 @@ class Navigator:
             return None
 
     def _get_monitor_center(
-        self, cursor_x: int | None = None, cursor_y: int | None = None
-    ) -> tuple[int, int] | None:
+        self,
+        cursor_x: int | None = None,
+        cursor_y: int | None = None,
+        *,
+        monitor_id: int | None = None,
+    ) -> tuple[float, float] | None:
         try:
             resp = self._ipc.send("j/monitors")
             monitors: list[dict[str, Any]] = json.loads(resp)
@@ -1111,26 +1116,62 @@ class Navigator:
                 try:
                     x = int(monitor["x"])
                     y = int(monitor["y"])
-                    width = int(monitor["width"])
-                    height = int(monitor["height"])
+                    pixel_width = int(monitor["width"])
+                    pixel_height = int(monitor["height"])
+                    scale = float(monitor["scale"])
+                    transform = int(monitor["transform"])
                 except (KeyError, TypeError, ValueError):
                     continue
+                if (
+                    pixel_width <= 0
+                    or pixel_height <= 0
+                    or not math.isfinite(scale)
+                    or scale <= 0
+                ):
+                    continue
+                if transform % 2 == 1:
+                    pixel_width, pixel_height = pixel_height, pixel_width
+                width = math.floor(pixel_width / scale + 0.5)
+                height = math.floor(pixel_height / scale + 0.5)
                 if width <= 0 or height <= 0:
                     continue
                 parsed.append((monitor, x, y, width, height))
 
+            if monitor_id is not None:
+                for monitor, x, y, width, height in parsed:
+                    try:
+                        parsed_id = int(monitor["id"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if parsed_id == monitor_id:
+                        return x + width / 2, y + height / 2
+                return None
+
             if cursor_x is not None and cursor_y is not None:
                 for _monitor, x, y, width, height in parsed:
                     if x <= cursor_x < x + width and y <= cursor_y < y + height:
-                        return x + width // 2, y + height // 2
+                        return x + width / 2, y + height / 2
                 return None
 
             for monitor, x, y, width, height in parsed:
                 if monitor.get("focused", False):
-                    return x + width // 2, y + height // 2
+                    return x + width / 2, y + height / 2
             if parsed:
                 _monitor, x, y, width, height = parsed[0]
-                return x + width // 2, y + height // 2
+                return x + width / 2, y + height / 2
         except Exception as e:
             log.debug("get_monitor_center failed: %s", e)
         return None
+
+    def get_canvas_visual_center(
+        self, workspace_id: int, monitor_id: int
+    ) -> tuple[float, float] | None:
+        """Return the current visual center of a Canvas workspace in world space."""
+        center = self._get_monitor_center(monitor_id=monitor_id)
+        if center is None:
+            return None
+        center_x, center_y = center
+        viewport = self._canvas_viewport(workspace_id)
+        if viewport.enabled:
+            return viewport.screen_to_world(center_x, center_y)
+        return center

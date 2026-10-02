@@ -3,6 +3,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
+from canvas.hypr import CanvasViewport
 from canvas.navigation import Navigator, _safe_int
 from canvas.toggle_state import ToggleStateError
 
@@ -163,8 +164,26 @@ def test_get_monitor_center_focused():
     ipc = MagicMock()
     ipc.send.return_value = json.dumps(
         [
-            {"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080},
-            {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            },
+            {
+                "id": 1,
+                "focused": False,
+                "x": 1920,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            },
         ]
     )
     nav = _make_nav(ipc)
@@ -177,7 +196,16 @@ def test_get_monitor_center_fallback_first():
     ipc = MagicMock()
     ipc.send.return_value = json.dumps(
         [
-            {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
+            {
+                "id": 1,
+                "focused": False,
+                "x": 1920,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            },
         ]
     )
     nav = _make_nav(ipc)
@@ -189,8 +217,26 @@ def test_get_monitor_center_uses_point_under_cursor():
     ipc = MagicMock()
     ipc.send.return_value = json.dumps(
         [
-            {"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080},
-            {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            },
+            {
+                "id": 1,
+                "focused": False,
+                "x": 1920,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            },
         ]
     )
     nav = _make_nav(ipc)
@@ -201,7 +247,18 @@ def test_get_monitor_center_uses_point_under_cursor():
 def test_get_monitor_center_rejects_point_outside_all_monitors():
     ipc = MagicMock()
     ipc.send.return_value = json.dumps(
-        [{"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080}]
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            }
+        ]
     )
     nav = _make_nav(ipc)
 
@@ -213,6 +270,200 @@ def test_get_monitor_center_error():
     ipc.send.side_effect = ConnectionError("fail")
     nav = _make_nav(ipc)
     assert nav._get_monitor_center() is None
+
+
+def test_get_monitor_center_2560x1440():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 2560,
+                "height": 1440,
+                "scale": 1.0,
+                "transform": 0,
+            }
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center() == (1280, 720)
+
+
+def test_get_monitor_center_fractional_scale():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 2560,
+                "height": 1440,
+                "scale": 1.25,
+                "transform": 0,
+            }
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center() == (1024, 576)
+
+
+def test_get_monitor_center_transform_90_swaps_axes_before_scaling():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 100,
+                "y": 200,
+                "width": 2560,
+                "height": 1440,
+                "scale": 1.0,
+                "transform": 1,
+            }
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center() == (820, 1480)
+
+
+def test_get_monitor_center_transform_180_keeps_axes():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 100,
+                "y": 200,
+                "width": 2560,
+                "height": 1440,
+                "scale": 1.0,
+                "transform": 2,
+            }
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center() == (1380, 920)
+
+
+def test_get_monitor_center_uses_hyprland_half_away_rounding_for_size():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 1921,
+                "height": 1081,
+                "scale": 2.0,
+                "transform": 0,
+            }
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert round(1921 / 2.0) == 960
+    assert nav._get_monitor_center() == (480.5, 270.5)
+
+
+def test_get_monitor_center_explicit_monitor_id_ignores_focused_monitor():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            },
+            {
+                "id": 7,
+                "focused": False,
+                "x": 1920,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 1.0,
+                "transform": 0,
+            },
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center(monitor_id=7) == (2880, 540)
+
+
+def test_get_monitor_center_invalid_scale_is_rejected():
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            {
+                "id": 0,
+                "focused": True,
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "scale": 0,
+                "transform": 0,
+            }
+        ]
+    )
+    nav = _make_nav(ipc)
+
+    assert nav._get_monitor_center() is None
+
+
+def test_get_canvas_visual_center_disabled_viewport_uses_screen_center():
+    nav = _make_nav()
+    with (
+        patch.object(nav, "_get_monitor_center", return_value=(2880.0, 540.0)),
+        patch.object(nav, "_canvas_viewport", return_value=CanvasViewport()),
+    ):
+        assert nav.get_canvas_visual_center(2, 7) == (2880.0, 540.0)
+
+
+def test_get_canvas_visual_center_neutral_enabled_viewport_is_unchanged():
+    nav = _make_nav()
+    viewport = CanvasViewport(enabled=True, monitor_x=1920.0, monitor_y=0.0)
+    with (
+        patch.object(nav, "_get_monitor_center", return_value=(2880.0, 540.0)),
+        patch.object(nav, "_canvas_viewport", return_value=viewport),
+    ):
+        assert nav.get_canvas_visual_center(2, 7) == (2880.0, 540.0)
+
+
+def test_get_canvas_visual_center_applies_pan_zoom_and_monitor_origin():
+    nav = _make_nav()
+    viewport = CanvasViewport(
+        enabled=True,
+        zoom=0.5,
+        offset_x=100.0,
+        offset_y=-50.0,
+        monitor_x=1920.0,
+        monitor_y=120.0,
+    )
+    with (
+        patch.object(nav, "_get_monitor_center", return_value=(2880.0, 660.0)),
+        patch.object(nav, "_canvas_viewport", return_value=viewport),
+    ):
+        assert nav.get_canvas_visual_center(2, 7) == (3940.0, 1150.0)
 
 
 def test_pan_to_window():
@@ -538,7 +789,20 @@ def test_navigate_cooldown_uses_monotonic_clock():
             return json.dumps(windows)
         if "activewindow" in cmd:
             return json.dumps({"class": "a", "address": "0x1"})
-        return json.dumps([{"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080}])
+        return json.dumps(
+            [
+                {
+                    "id": 0,
+                    "focused": True,
+                    "x": 0,
+                    "y": 0,
+                    "width": 1920,
+                    "height": 1080,
+                    "scale": 1.0,
+                    "transform": 0,
+                }
+            ]
+        )
 
     ipc.send.side_effect = fake_send
     nav = Navigator(ipc=ipc, protected_apps=[], cooldown=10.0)
@@ -565,7 +829,20 @@ def test_navigate_passes_workspace_to_pan():
             return json.dumps(windows)
         if "activewindow" in cmd:
             return json.dumps({"class": "a", "address": "0x1"})
-        return json.dumps([{"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080}])
+        return json.dumps(
+            [
+                {
+                    "id": 0,
+                    "focused": True,
+                    "x": 0,
+                    "y": 0,
+                    "width": 1920,
+                    "height": 1080,
+                    "scale": 1.0,
+                    "transform": 0,
+                }
+            ]
+        )
 
     ipc.send.side_effect = fake_send
     nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)

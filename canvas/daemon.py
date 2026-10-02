@@ -188,10 +188,28 @@ class EventListener:
             if h > max_h:
                 h = max_h
 
-        # Position: center of viewport (use reasonable default)
-        # Since we avoid j/monitors query, use a sensible default center
-        # that works for common resolutions (1920x1080 -> 960, 540)
-        x, y = 960 - w // 2, 540 - h // 2
+        # Position at the visual center of this window's own monitor/workspace.
+        # If that monitor cannot be resolved, preserve the current window center
+        # instead of guessing a monitor or resolution.
+        world_center: tuple[float, float] | None = None
+        try:
+            monitor_id = int(client.get("monitor"))
+        except (TypeError, ValueError):
+            monitor_id = None
+        if monitor_id is not None:
+            world_center = self._navigator.get_canvas_visual_center(ws_id, monitor_id)
+        if world_center is None:
+            try:
+                world_center = (
+                    float(at[0]) + float(size[0]) / 2,
+                    float(at[1]) + float(size[1]) / 2,
+                )
+            except (TypeError, ValueError):
+                self._schedule_retry(addr, attempt)
+                return
+
+        x = world_center[0] - w / 2
+        y = world_center[1] - h / 2
 
         lua = (
             f"{LUA_DISPATCH_HELPER}\n"

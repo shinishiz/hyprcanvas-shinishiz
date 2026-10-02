@@ -6,6 +6,8 @@ import time
 from unittest.mock import MagicMock, patch
 
 from canvas.daemon import DaemonState, EventListener, _lua_escape
+from canvas.hypr import CanvasViewport
+from canvas.navigation import Navigator
 from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState
 
 
@@ -769,6 +771,7 @@ def test_event_listener_openwindow_tiled_converts_to_floating():
     navigator = MagicMock()
     navigator.is_canvas_active.return_value = True
     navigator.get_spawn_geometry.return_value = (800, 600)
+    navigator.get_canvas_visual_center.return_value = (960.0, 540.0)
     stop_event = threading.Event()
     listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
 
@@ -778,6 +781,7 @@ def test_event_listener_openwindow_tiled_converts_to_floating():
         "floating": False,
         "at": [100, 200],
         "size": [800, 600],
+        "monitor": 0,
         "workspace": {"id": 1},
         "hidden": False,
         "fullscreen": False,
@@ -795,7 +799,8 @@ def test_event_listener_openwindow_tiled_converts_to_floating():
     assert "move" in lua_code
     # Uses spawn geometry (800x600) and centers it
     assert "x = 800, y = 600" in lua_code
-    assert "x = 560, y = 240" in lua_code  # centered at 960,540
+    assert "x = 560.0, y = 240.0" in lua_code
+    navigator.get_canvas_visual_center.assert_called_once_with(1, 0)
     navigator.register_spawned_during_canvas.assert_called_once_with(1, "0xabc123")
 
 
@@ -852,6 +857,7 @@ def test_event_listener_openwindow_retry_on_missing_client():
     navigator = MagicMock()
     navigator.is_canvas_active.return_value = True
     navigator.get_spawn_geometry.return_value = (800, 600)
+    navigator.get_canvas_visual_center.return_value = (960.0, 540.0)
     stop_event = threading.Event()
     listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
 
@@ -876,6 +882,7 @@ def test_event_listener_openwindow_retry_on_missing_client():
         "floating": False,
         "at": [100, 200],
         "size": [800, 600],
+        "monitor": 0,
         "workspace": {"id": 1},
         "hidden": False,
         "fullscreen": False,
@@ -885,6 +892,160 @@ def test_event_listener_openwindow_retry_on_missing_client():
 
     # Should have called eval_lua
     assert ipc.eval_lua.called
+
+
+def _run_openwindow_with_real_navigator(
+    *,
+    client: dict,
+    monitors: list[dict],
+    spawn_geometry: tuple[int, int] | None,
+    viewport: CanvasViewport | None = None,
+) -> tuple[str, Navigator]:
+    ipc = MagicMock()
+
+    def send(command: str) -> str:
+        if command == "j/clients":
+            return json.dumps([client])
+        if command == "j/monitors":
+            return json.dumps(monitors)
+        raise AssertionError(f"unexpected IPC command: {command}")
+
+    ipc.send.side_effect = send
+    ipc.get_canvas_viewport.return_value = viewport or CanvasViewport()
+    with patch(
+        "canvas.navigation.toggle_state.load",
+        return_value={1: {"active": True, "tiled": {}, "floating": {}}},
+    ):
+        navigator = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+    with patch.object(navigator, "get_spawn_geometry", return_value=spawn_geometry):
+        listener = EventListener(
+            navigator=navigator,
+            ipc=ipc,
+            stop_event=threading.Event(),
+        )
+        listener._handle_openwindow("abc123,workspace1,kitty,Title")
+
+    assert ipc.eval_lua.called
+    return ipc.eval_lua.call_args.args[0], navigator
+
+
+def _spawn_client(
+    *,
+    at: list[int] | None = None,
+    size: list[int] | None = None,
+    monitor: int = 0,
+) -> dict:
+    return {
+        "address": "0xabc123",
+        "floating": False,
+        "at": at or [100, 200],
+        "size": size or [800, 600],
+        "monitor": monitor,
+        "workspace": {"id": 1},
+        "hidden": False,
+        "fullscreen": False,
+    }
+
+
+def _monitor(
+    *,
+    monitor_id: int = 0,
+    x: int = 0,
+    y: int = 0,
+    width: int = 1920,
+    height: int = 1080,
+    scale: float = 1.0,
+    transform: int = 0,
+) -> dict:
+    return {
+        "id": monitor_id,
+        "focused": monitor_id == 0,
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "scale": scale,
+        "transform": transform,
+    }
+
+
+def test_event_listener_openwindow_second_monitor_uses_global_offset():
+    lua, _nav = _run_openwindow_with_real_navigator(
+        client=_spawn_client(monitor=1),
+        monitors=[_monitor(), _monitor(monitor_id=1, x=1920)],
+        spawn_geometry=(800, 600),
+    )
+
+    assert "x = 2480.0, y = 240.0" in lua
+
+
+def test_event_listener_openwindow_non_1080_monitor_uses_real_center():
+    lua, _nav = _run_openwindow_with_real_navigator(
+        client=_spawn_client(),
+        monitors=[_monitor(width=2560, height=1440)],
+        spawn_geometry=(800, 600),
+    )
+
+    assert "x = 880.0, y = 420.0" in lua
+
+
+def test_event_listener_openwindow_fractional_scale_uses_logical_center():
+    lua, _nav = _run_openwindow_with_real_navigator(
+        client=_spawn_client(),
+        monitors=[_monitor(width=2560, height=1440, scale=1.25)],
+        spawn_geometry=(800, 600),
+    )
+
+    assert "x = 624.0, y = 276.0" in lua
+
+
+def test_event_listener_openwindow_rotated_monitor_swaps_axes():
+    lua, _nav = _run_openwindow_with_real_navigator(
+        client=_spawn_client(),
+        monitors=[_monitor(width=2560, height=1440, transform=1)],
+        spawn_geometry=(800, 600),
+    )
+
+    assert "x = 320.0, y = 980.0" in lua
+
+
+def test_event_listener_openwindow_pan_zoom_uses_world_center():
+    lua, _nav = _run_openwindow_with_real_navigator(
+        client=_spawn_client(monitor=1),
+        monitors=[_monitor(), _monitor(monitor_id=1, x=1920)],
+        spawn_geometry=(800, 600),
+        viewport=CanvasViewport(
+            enabled=True,
+            zoom=0.5,
+            offset_x=100.0,
+            offset_y=-50.0,
+            monitor_x=1920.0,
+            monitor_y=0.0,
+        ),
+    )
+
+    assert "x = 3540.0, y = 730.0" in lua
+
+
+def test_event_listener_openwindow_missing_monitor_uses_current_window_center():
+    lua, _nav = _run_openwindow_with_real_navigator(
+        client=_spawn_client(at=[100, 200], size=[900, 700], monitor=99),
+        monitors=[_monitor()],
+        spawn_geometry=(800, 600),
+    )
+
+    assert "x = 150.0, y = 250.0" in lua
+
+
+def test_event_listener_openwindow_size_fallback_keeps_cap_and_new_center():
+    lua, _nav = _run_openwindow_with_real_navigator(
+        client=_spawn_client(size=[1600, 900]),
+        monitors=[_monitor(width=2560, height=1440)],
+        spawn_geometry=None,
+    )
+
+    assert "x = 1200, y = 800" in lua
+    assert "x = 680.0, y = 320.0" in lua
 
 
 def test_event_listener_closewindow_removes_from_state():
