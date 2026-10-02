@@ -86,6 +86,54 @@ def test_handle_ipc_status():
     assert ds.handle_ipc("STATUS") == "INVERTED PANNING"
 
 
+def test_zoom_out_only_dispatches_for_active_canvas_workspace():
+    ipc = MagicMock()
+    ipc.send.return_value = '{"id":4}'
+    ipc.set_canvas_viewport.return_value = True
+    ds = _make_daemon_state(ipc)
+    ds.navigator.is_canvas_active.return_value = True
+
+    assert ds.handle_ipc("ZOOM_OUT") == "OK"
+    ipc.set_canvas_viewport.assert_called_once_with("zoom-out", 4)
+
+
+def test_zoom_is_rejected_outside_canvas():
+    ipc = MagicMock()
+    ipc.send.return_value = '{"id":4}'
+    ds = _make_daemon_state(ipc)
+    ds.navigator.is_canvas_active.return_value = False
+
+    assert ds.handle_ipc("ZOOM_IN") == "ERROR:CANVAS_INACTIVE"
+    ipc.set_canvas_viewport.assert_not_called()
+
+
+def test_zoom_reset_reports_plugin_failure():
+    ipc = MagicMock()
+    ipc.send.return_value = '{"id":9}'
+    ipc.set_canvas_viewport.return_value = False
+    ds = _make_daemon_state(ipc)
+    ds.navigator.is_canvas_active.return_value = True
+
+    assert ds.handle_ipc("ZOOM_RESET") == "ERROR:ZOOM_UNAVAILABLE"
+    ipc.set_canvas_viewport.assert_called_once_with("zoom-reset", 9)
+
+
+def test_zoom_stops_active_pan_before_changing_camera():
+    ipc = MagicMock()
+    ipc.send.return_value = '{"id":2}'
+    ipc.set_canvas_viewport.return_value = True
+    ds = _make_daemon_state(ipc)
+    ds.navigator.is_canvas_active.return_value = True
+    ds.panning.start_pan()
+    ds.baselines = {"0x1": (10, 20)}
+    ds.baseline_workspace = 2
+
+    assert ds.handle_ipc("ZOOM_OUT") == "OK"
+    assert ds.panning.pan_active is False
+    assert ds.baselines == {}
+    assert ds.baseline_workspace is None
+
+
 def test_handle_ipc_unknown():
     assert _make_daemon_state().handle_ipc("FOOBAR") == "UNKNOWN: FOOBAR"
 
@@ -193,6 +241,21 @@ def test_move_windows_to_delta():
     assert "b[2] + -30" in lua_code
     assert "relative = false" in lua_code
     assert "workspace = 2" in lua_code
+
+
+def test_move_windows_to_delta_scales_screen_delta_into_world_space():
+    ipc = MagicMock()
+    ipc.eval_lua.return_value = "ok"
+    ds = _make_daemon_state(ipc)
+    ds.baselines = {"0xabc": (100, 200)}
+    ds.baseline_workspace = 2
+    ds.baseline_zoom = 0.5
+
+    ds.move_windows_to_delta(100, -50)
+
+    lua_code = ipc.eval_lua.call_args[0][0]
+    assert "b[1] + 200" in lua_code
+    assert "b[2] + -100" in lua_code
 
 
 def test_move_windows_to_delta_without_workspace_is_noop():

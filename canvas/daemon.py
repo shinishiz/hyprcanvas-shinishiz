@@ -15,6 +15,7 @@ from canvas import debug
 from canvas.config import load
 from canvas.hypr import (
     LUA_DISPATCH_HELPER,
+    CanvasViewport,
     HyprIPC,
     _hypr_socket2_path,
     _normalize_address,
@@ -31,7 +32,6 @@ _VALID_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
 _MAX_OPENWINDOW_RETRIES = 3
 _OPENWINDOW_RETRY_DELAY = 0.05  # 50ms
-
 
 def _lua_escape(s: str) -> str:
     """Escape a string for safe interpolation into a Lua double-quoted literal."""
@@ -281,6 +281,7 @@ class DaemonState:
         # edge-scroll moves are scoped to it so other workspaces'
         # floating layouts stay untouched.
         self.baseline_workspace: int | None = None
+        self.baseline_zoom = 1.0
         self.edge_scroll_workspace: int | None = None
         # Serializes compositor mutations from the IPC thread with main-loop
         # pan/edge moves. State objects retain their own fine-grained locks.
@@ -325,6 +326,17 @@ class DaemonState:
             log.debug("get active workspace failed: %s", e)
             return None
 
+    def _canvas_viewport(self, workspace_id: int) -> CanvasViewport:
+        """Current viewport for an active Canvas workspace, else identity."""
+        try:
+            if self.navigator.is_canvas_active(workspace_id) is not True:
+                return CanvasViewport()
+            viewport = self.ipc.get_canvas_viewport(workspace_id)
+            return viewport if isinstance(viewport, CanvasViewport) else CanvasViewport()
+        except Exception as e:
+            log.debug("canvas viewport query failed for ws=%s: %s", workspace_id, e)
+            return CanvasViewport()
+
     _IPC_DISPATCH: dict[str, str] = {
         "PAN_START": "_handle_pan_start",
         "PAN_STOP": "_handle_pan_stop",
@@ -333,6 +345,9 @@ class DaemonState:
         "NAV_UP": "_handle_nav_up",
         "NAV_DOWN": "_handle_nav_down",
         "CENTER_CURSOR": "_handle_center_cursor",
+        "ZOOM_IN": "_handle_zoom_in",
+        "ZOOM_OUT": "_handle_zoom_out",
+        "ZOOM_RESET": "_handle_zoom_reset",
         "EDGE_START": "_handle_edge_start",
         "EDGE_STOP": "_handle_edge_stop",
         "TOGGLE": "_handle_toggle",
@@ -370,6 +385,8 @@ class DaemonState:
     def _handle_pan_stop(self) -> str:
         self.panning.stop_pan()
         self.baselines = {}
+        self.baseline_workspace = None
+        self.baseline_zoom = 1.0
         debug.dbg2("PAN_STOP")
         return "PAN_OFF"
 
@@ -429,6 +446,27 @@ class DaemonState:
         )
         return "OK"
 
+    def _handle_zoom(self, action: str) -> str:
+        workspace_id = self._get_active_workspace_id()
+        if workspace_id is None:
+            return "ERROR:NO_WORKSPACE"
+        if self.navigator.is_canvas_active(workspace_id) is not True:
+            return "ERROR:CANVAS_INACTIVE"
+
+        self._stop_competing_modes("zoom")
+        if not self.ipc.set_canvas_viewport(action, workspace_id):
+            return "ERROR:ZOOM_UNAVAILABLE"
+        return "OK"
+
+    def _handle_zoom_in(self) -> str:
+        return self._handle_zoom("zoom-in")
+
+    def _handle_zoom_out(self) -> str:
+        return self._handle_zoom("zoom-out")
+
+    def _handle_zoom_reset(self) -> str:
+        return self._handle_zoom("zoom-reset")
+
     def _get_focused_window_address(self) -> str:
         """Address of the focused window, empty string on failure."""
         try:
@@ -459,6 +497,8 @@ class DaemonState:
             return None
 
         found: dict[str, Any] | None = None
+        viewport = self._canvas_viewport(workspace_id)
+        hit_x, hit_y = viewport.screen_to_world(cx, cy) if viewport.enabled else (cx, cy)
         for w in clients:
             if not w.get("floating"):
                 continue
@@ -472,7 +512,7 @@ class DaemonState:
             size = w.get("size", [0, 0])
             if not addr or len(at) < 2 or len(size) < 2:
                 continue
-            if at[0] <= cx < at[0] + size[0] and at[1] <= cy < at[1] + size[1]:
+            if at[0] <= hit_x < at[0] + size[0] and at[1] <= hit_y < at[1] + size[1]:
                 found = w
         return found
 
@@ -531,6 +571,13 @@ class DaemonState:
             return "EDGE_NO_WINDOW"
 
         self.edge_scroll_workspace = ws_id
+        viewport = self._canvas_viewport(ws_id)
+        if viewport.enabled:
+            self.edge_scroll.set_viewport(
+                viewport.zoom, viewport.offset_x, viewport.offset_y
+            )
+        else:
+            self.edge_scroll.set_viewport(1.0, 0.0, 0.0)
         if not self._fetch_monitor_rect():
             # Without real geometry the overflow math would run against a
             # default 1920x1080 rect — on multi-monitor setups that causes
@@ -561,6 +608,7 @@ class DaemonState:
 
     def _handle_edge_stop(self) -> str:
         result = self.edge_scroll.stop()
+        self.edge_scroll.set_viewport(1.0, 0.0, 0.0)
         debug.dbg("EDGE_STOP", verdict=result)
         return result
 
@@ -580,9 +628,12 @@ class DaemonState:
             self.panning.stop_pan()
             self.baselines = {}
             self.baseline_workspace = None
+            self.baseline_zoom = 1.0
             debug.dbg2("MODE_SWITCH", to=to, stopped="pan")
         if self.edge_scroll.active:
             self.edge_scroll.stop()
+            self.edge_scroll_workspace = None
+            self.edge_scroll.set_viewport(1.0, 0.0, 0.0)
             debug.dbg2("MODE_SWITCH", to=to, stopped="edge")
 
     def _handle_canvas_toggle(self) -> str:
@@ -640,11 +691,14 @@ class DaemonState:
                     baselines[addr] = (at[0], at[1])
             self.baselines = baselines
             self.baseline_workspace = workspace_id
+            viewport = self._canvas_viewport(workspace_id)
+            self.baseline_zoom = viewport.zoom if viewport.enabled else 1.0
             return True
         except Exception as e:
             log.warning("fetch baselines failed: %s", e)
             self.baselines = {}
             self.baseline_workspace = None
+            self.baseline_zoom = 1.0
             return False
 
     def restore_baselines(self) -> None:
@@ -690,6 +744,9 @@ class DaemonState:
             return
         try:
             ws_id = int(self.baseline_workspace)
+            zoom = self.baseline_zoom if self.baseline_zoom > 0 else 1.0
+            world_dx = int(round(total_dx / zoom))
+            world_dy = int(round(total_dy / zoom))
             lines = [
                 LUA_DISPATCH_HELPER,
                 f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})",
@@ -704,8 +761,8 @@ class DaemonState:
             lines.append("  if b then")
             lines.append(
                 f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.move({{"
-                f" x = b[1] + {total_dx},"
-                f" y = b[2] + {total_dy},"
+                f" x = b[1] + {world_dx},"
+                f" y = b[2] + {world_dy},"
                 f" relative = false, window = w }})))"
             )
             lines.append("  end")
@@ -728,6 +785,11 @@ class DaemonState:
             return
         ws_id = int(self.edge_scroll_workspace)
         dragged = self.edge_scroll.dragged_addr
+        zoom = self.edge_scroll.viewport_zoom
+        if zoom <= 0:
+            zoom = 1.0
+        dx = int(round(dx / zoom))
+        dy = int(round(dy / zoom))
         try:
             safe_addr = _lua_escape(dragged)
             lua = (
@@ -781,6 +843,7 @@ def run() -> None:
         cooldown=cfg["navigation"]["cooldown"],
         preserve_geometry=bool(canvas_cfg.get("preserve_geometry", True)),
     )
+    navigator.sync_canvas_viewports()
 
     daemon_state = DaemonState(
         panning=state, edge_scroll=edge_scroll, navigator=navigator, ipc=ipc

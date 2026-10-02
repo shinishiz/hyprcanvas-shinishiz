@@ -200,6 +200,9 @@ class EdgeScrollState:
         self._last_move_time: float = 0.0
         self._pending_dx = 0.0
         self._pending_dy = 0.0
+        self._viewport_zoom = 1.0
+        self._viewport_offset_x = 0.0
+        self._viewport_offset_y = 0.0
         self._lock = threading.Lock()
 
     @property
@@ -241,18 +244,43 @@ class EdgeScrollState:
             self._monitor_w = w
             self._monitor_h = h
 
+    def set_viewport(self, zoom: float, offset_x: float, offset_y: float) -> None:
+        """Set the world→screen projection used while an edge drag is active."""
+        with self._lock:
+            self._viewport_zoom = zoom if zoom > 0 else 1.0
+            self._viewport_offset_x = offset_x
+            self._viewport_offset_y = offset_y
+
+    @property
+    def viewport_zoom(self) -> float:
+        with self._lock:
+            return self._viewport_zoom
+
+    def _project_geometry(self, x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
+        z = self._viewport_zoom
+        mx, my = self._monitor_x, self._monitor_y
+        return (
+            int(round(mx + (x - mx - self._viewport_offset_x) * z)),
+            int(round(my + (y - my - self._viewport_offset_y) * z)),
+            int(round(w * z)),
+            int(round(h * z)),
+        )
+
     def start(self, params: EdgeScrollParams) -> str:
         """Activate edge-scroll, remembering the grab-time window position."""
         with self._lock:
             if not self.enabled:
                 return "EDGE_DISABLED"
+            win_x, win_y, win_w, win_h = self._project_geometry(
+                params.win_x, params.win_y, params.win_w, params.win_h
+            )
             self._active = True
             self._dragged_addr = params.dragged_addr
             self._session += 1
-            self._grab_x = params.win_x
-            self._grab_y = params.win_y
-            self._prev_x = params.win_x
-            self._prev_y = params.win_y
+            self._grab_x = win_x
+            self._grab_y = win_y
+            self._prev_x = win_x
+            self._prev_y = win_y
             self._confirmed_drag = False
             self._last_geo = None
             self._pending_dx = 0.0
@@ -279,6 +307,8 @@ class EdgeScrollState:
         with self._lock:
             if not self._active or not self.enabled:
                 return
+
+            x, y, w, h = self._project_geometry(x, y, w, h)
 
             if addr != self._dragged_addr:
                 # Focus left the grabbed window mid-press: no real drag.

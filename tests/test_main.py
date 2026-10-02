@@ -47,6 +47,20 @@ def test_ctl_main_center_cursor_command():
         mock_send.assert_called_with("CENTER_CURSOR")
 
 
+def test_ctl_main_zoom_commands():
+    for command, expected in [
+        ("zoom-in", "ZOOM_IN"),
+        ("zoom-out", "ZOOM_OUT"),
+        ("zoom-reset", "ZOOM_RESET"),
+    ]:
+        with (
+            patch.object(sys, "argv", ["canvas-ctl", command]),
+            patch("canvas.ipc.send_command", return_value="OK") as mock_send,
+        ):
+            ctl_main()
+            mock_send.assert_called_once_with(expected)
+
+
 def test_ctl_main_edge_start_command():
     """canvas-ctl edge-start normalizes to EDGE_START."""
     with (
@@ -112,6 +126,9 @@ def test_ctl_main_help_lists_commands(capsys):
         ("nav-up", ""),
         ("nav-down", ""),
         ("center-cursor", ""),
+        ("zoom-in", ""),
+        ("zoom-out", ""),
+        ("zoom-reset", ""),
         ("canvas-toggle", ""),
         ("canvas-toggle-all", ""),
         ("canvas-toggle-single", ""),

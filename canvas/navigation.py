@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from canvas import debug, toggle_state
-from canvas.hypr import LUA_DISPATCH_HELPER, HyprIPC
+from canvas.hypr import LUA_DISPATCH_HELPER, CanvasViewport, HyprIPC
 
 log = logging.getLogger("canvas.navigation")
 
@@ -96,6 +96,17 @@ class Navigator:
     def is_canvas_active(self, workspace_id: int) -> bool:
         """Check if Canvas mode is active for a workspace."""
         return workspace_id in self._canvas_mode_workspaces
+
+    def sync_canvas_viewports(self) -> None:
+        """Best-effort startup sync for workspaces persisted as Canvas ON."""
+        for workspace_id in self._canvas_mode_workspaces:
+            self._ipc.set_canvas_viewport("enable", workspace_id)
+
+    def _canvas_viewport(self, workspace_id: int) -> CanvasViewport:
+        if workspace_id not in self._canvas_mode_workspaces:
+            return CanvasViewport()
+        viewport = self._ipc.get_canvas_viewport(workspace_id)
+        return viewport if isinstance(viewport, CanvasViewport) else CanvasViewport()
 
     def register_spawned_during_canvas(self, workspace_id: int, addr: str) -> None:
         """Register a window that was converted to floating during Canvas ON."""
@@ -370,6 +381,7 @@ class Navigator:
 
             self._canvas_mode_workspaces = next_modes
             self._floating_geos = next_floating
+            self._ipc.set_canvas_viewport("disable", workspace_id)
             # Clear spawned tracking for this workspace
             self._spawned_during_canvas.pop(workspace_id, None)
             if debug.enabled():
@@ -443,6 +455,7 @@ class Navigator:
 
         self._canvas_mode_workspaces = next_modes
         self._floating_geos = next_floating
+        self._ipc.set_canvas_viewport("enable", workspace_id)
         if debug.enabled():
             debug.dbg2(
                 "TOGGLE_ON",
@@ -946,8 +959,13 @@ class Navigator:
         if center is None:
             return False
         center_x, center_y = center
-        safe_x = _safe_int(center_x, "center_x")
-        safe_y = _safe_int(center_y, "center_y")
+        world_center_x = float(center_x)
+        world_center_y = float(center_y)
+        viewport = self._canvas_viewport(workspace_id)
+        if viewport.enabled:
+            world_center_x, world_center_y = viewport.screen_to_world(center_x, center_y)
+        safe_x = _safe_int(world_center_x, "center_x")
+        safe_y = _safe_int(world_center_y, "center_y")
         ws_id = _safe_int(workspace_id, "workspace_id")
         lua = (
             f"{LUA_DISPATCH_HELPER}\n"
@@ -998,9 +1016,16 @@ class Navigator:
 
         target_cx = target["at"][0] + target["size"][0] // 2
         target_cy = target["at"][1] + target["size"][1] // 2
+        world_center_x = float(center_x)
+        world_center_y = float(center_y)
 
-        dx = center_x - target_cx
-        dy = center_y - target_cy
+        if workspace_id is not None:
+            viewport = self._canvas_viewport(workspace_id)
+            if viewport.enabled:
+                world_center_x, world_center_y = viewport.screen_to_world(center_x, center_y)
+
+        dx = world_center_x - target_cx
+        dy = world_center_y - target_cy
 
         safe_dx = _safe_int(dx, "dx")
         safe_dy = _safe_int(dy, "dy")

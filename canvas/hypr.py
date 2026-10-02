@@ -16,6 +16,7 @@ import logging
 import os
 import socket
 import threading
+from dataclasses import dataclass
 
 log = logging.getLogger("canvas.hypr")
 
@@ -33,6 +34,30 @@ end
 
 class HyprIPCError(RuntimeError):
     """Hyprland returned a textual error response for an IPC request."""
+
+
+@dataclass(frozen=True)
+class CanvasViewport:
+    """Canvas camera state expressed in world-space units."""
+
+    enabled: bool = False
+    zoom: float = 1.0
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    monitor_x: float = 0.0
+    monitor_y: float = 0.0
+
+    def screen_to_world(self, x: float, y: float) -> tuple[float, float]:
+        return (
+            self.monitor_x + self.offset_x + (x - self.monitor_x) / self.zoom,
+            self.monitor_y + self.offset_y + (y - self.monitor_y) / self.zoom,
+        )
+
+    def world_to_screen(self, x: float, y: float) -> tuple[float, float]:
+        return (
+            self.monitor_x + (x - self.monitor_x - self.offset_x) * self.zoom,
+            self.monitor_y + (y - self.monitor_y - self.offset_y) * self.zoom,
+        )
 
 
 def _hypr_socket_path() -> str:
@@ -158,6 +183,37 @@ class HyprIPC:
             return addr, int(at[0]), int(at[1]), int(size[0]), int(size[1])
         except (TypeError, ValueError):
             return None
+
+    def set_canvas_viewport(self, action: str, workspace_id: int) -> bool:
+        """Best-effort bridge to the optional hypr-canvas plugin."""
+        if action not in {"enable", "disable", "reset", "zoom-in", "zoom-out", "zoom-reset"}:
+            raise ValueError(f"invalid canvas viewport action: {action}")
+        try:
+            self.send(f"hypr-canvas {action} {int(workspace_id)}")
+            return True
+        except Exception as e:
+            log.debug("hypr-canvas %s ws=%s unavailable: %s", action, workspace_id, e)
+            return False
+
+    def get_canvas_viewport(self, workspace_id: int) -> CanvasViewport:
+        """Read camera state; fall back to an identity viewport if plugin is absent."""
+        try:
+            raw = self.send(f"hypr-canvas status {int(workspace_id)}")
+            data = json.loads(raw)
+            zoom = float(data.get("zoom", 1.0))
+            if not (0.0 < zoom <= 1.0):
+                raise ValueError(f"invalid zoom {zoom}")
+            return CanvasViewport(
+                enabled=bool(data.get("enabled", False)),
+                zoom=zoom,
+                offset_x=float(data.get("offset_x", 0.0)),
+                offset_y=float(data.get("offset_y", 0.0)),
+                monitor_x=float(data.get("monitor_x", 0.0)),
+                monitor_y=float(data.get("monitor_y", 0.0)),
+            )
+        except Exception as e:
+            log.debug("hypr-canvas status ws=%s unavailable: %s", workspace_id, e)
+            return CanvasViewport()
 
 
 _default: HyprIPC | None = None

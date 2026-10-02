@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from canvas.hypr import HyprIPC, HyprIPCError, eval_lua, get_cursor_pos, send
+from canvas.hypr import CanvasViewport, HyprIPC, HyprIPCError, eval_lua, get_cursor_pos, send
 
 
 def _make_ipc_with_mock(mock_sock: MagicMock) -> HyprIPC:
@@ -227,3 +227,55 @@ def test_module_level_get_active_window_geometry_delegates():
         geo = get_active_window_geometry()
 
     assert geo == ("0x9", 0, 0, 1, 2)
+
+
+def test_canvas_viewport_round_trip():
+    viewport = CanvasViewport(enabled=True, zoom=0.5, offset_x=100.0, offset_y=-50.0)
+    sx, sy = viewport.world_to_screen(500.0, 350.0)
+    assert (sx, sy) == (200.0, 200.0)
+    assert viewport.screen_to_world(sx, sy) == (500.0, 350.0)
+
+
+def test_canvas_viewport_round_trip_on_offset_monitor():
+    viewport = CanvasViewport(
+        enabled=True,
+        zoom=0.5,
+        offset_x=100.0,
+        offset_y=-50.0,
+        monitor_x=1920.0,
+        monitor_y=120.0,
+    )
+    sx, sy = viewport.world_to_screen(2500.0, 700.0)
+    assert viewport.screen_to_world(sx, sy) == (2500.0, 700.0)
+
+
+def test_set_canvas_viewport_dispatches_zoom_action():
+    ipc = HyprIPC("/tmp/test.sock")
+    ipc.send = MagicMock(return_value="ok")  # type: ignore[method-assign]
+
+    assert ipc.set_canvas_viewport("zoom-out", 7) is True
+    ipc.send.assert_called_once_with("hypr-canvas zoom-out 7")
+
+
+def test_set_canvas_viewport_rejects_unknown_action():
+    ipc = HyprIPC("/tmp/test.sock")
+    with pytest.raises(ValueError, match="invalid canvas viewport action"):
+        ipc.set_canvas_viewport("resize-windows", 1)
+
+
+def test_get_canvas_viewport_parses_camera_state():
+    ipc = HyprIPC("/tmp/test.sock")
+    ipc.send = MagicMock(  # type: ignore[method-assign]
+        return_value='{"enabled":true,"zoom":0.5,"offset_x":120.0,"offset_y":-40.0,"monitor_x":1920.0,"monitor_y":120.0}'
+    )
+
+    viewport = ipc.get_canvas_viewport(3)
+    assert viewport == CanvasViewport(True, 0.5, 120.0, -40.0, 1920.0, 120.0)
+    ipc.send.assert_called_once_with("hypr-canvas status 3")
+
+
+def test_get_canvas_viewport_invalid_zoom_falls_back_to_identity():
+    ipc = HyprIPC("/tmp/test.sock")
+    ipc.send = MagicMock(return_value='{"enabled":true,"zoom":1.5}')  # type: ignore[method-assign]
+
+    assert ipc.get_canvas_viewport(3) == CanvasViewport()
