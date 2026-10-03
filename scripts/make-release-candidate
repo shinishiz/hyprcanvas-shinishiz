@@ -1,0 +1,175 @@
+#!/usr/bin/env sh
+set -eu
+
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/make-release-candidate --output-dir DIR
+
+Create a local source release candidate from the current clean Git HEAD.
+The command creates a deterministic .tar.gz source archive, a .sha256 file,
+and a textual manifest. It does not create tags, commits, remotes, or releases.
+EOF
+}
+
+error() {
+    printf 'make-release-candidate: %s\n' "$*" >&2
+}
+
+output_dir=
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output-dir)
+            shift
+            if [ "$#" -eq 0 ]; then
+                error "--output-dir requires a value"
+                exit 2
+            fi
+            output_dir=$1
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            error "unknown argument: $1"
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+if [ -z "$output_dir" ]; then
+    error "--output-dir is required"
+    usage >&2
+    exit 2
+fi
+
+for command_name in git gzip sha256sum python3; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+        error "missing required command: $command_name"
+        exit 1
+    }
+done
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+metadata="$repo_dir/release/metadata.toml"
+
+if [ ! -f "$metadata" ]; then
+    error "missing release metadata: $metadata"
+    exit 1
+fi
+
+if [ -n "$(git -C "$repo_dir" status --porcelain)" ]; then
+    error "working tree must be clean"
+    exit 1
+fi
+
+head_commit=$(git -C "$repo_dir" rev-parse HEAD)
+short_commit=$(git -C "$repo_dir" rev-parse --short=12 HEAD)
+
+metadata_values=$(python3 - "$metadata" <<'PY'
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as file:
+    data = tomllib.load(file)
+
+values = (
+    data["project"]["name"],
+    data["project"]["suite_version"],
+    data["project"]["planned_tag"],
+    data["components"]["daemon"]["version"],
+    data["components"]["plugin"]["version"],
+    data["compatibility"]["hyprland"]["version"],
+    data["compatibility"]["hyprland"]["commit"],
+)
+for value in values:
+    if "\n" in value or "\t" in value:
+        raise SystemExit("release metadata contains an unsupported newline/tab")
+print("\t".join(values))
+PY
+)
+
+old_ifs=$IFS
+IFS=$(printf '\t')
+set -- $metadata_values
+IFS=$old_ifs
+
+if [ "$#" -ne 7 ]; then
+    error "could not parse canonical release metadata"
+    exit 1
+fi
+
+project=$1
+suite_version=$2
+planned_tag=$3
+daemon_version=$4
+plugin_version=$5
+hyprland_version=$6
+hyprland_commit=$7
+
+case "$project" in
+    *[!A-Za-z0-9._-]*|'') error "unsafe project name in metadata"; exit 1 ;;
+esac
+case "$planned_tag" in
+    *[!A-Za-z0-9._-]*|'') error "unsafe planned tag in metadata"; exit 1 ;;
+esac
+
+mkdir -p -- "$output_dir"
+output_dir=$(CDPATH= cd -- "$output_dir" && pwd)
+
+base_name="${project}-${planned_tag}-${short_commit}"
+archive="$output_dir/${base_name}.tar.gz"
+checksum_file="$archive.sha256"
+manifest="$archive.manifest.txt"
+archive_prefix="${project}-${planned_tag}/"
+tar_tmp=
+
+cleanup() {
+    if [ -n "$tar_tmp" ] && [ -e "$tar_tmp" ]; then
+        unlink "$tar_tmp"
+    fi
+}
+
+trap cleanup EXIT HUP INT TERM
+
+for path in "$archive" "$checksum_file" "$manifest"; do
+    if [ -e "$path" ]; then
+        error "output already exists: $path"
+        exit 1
+    fi
+done
+
+tar_tmp=$(mktemp "${TMPDIR:-/tmp}/hyprcanvas-release.XXXXXX.tar")
+git -C "$repo_dir" archive \
+    --format=tar \
+    --prefix="$archive_prefix" \
+    --output="$tar_tmp" \
+    HEAD
+gzip -n <"$tar_tmp" >"$archive"
+
+archive_sha256_line=$(sha256sum "$archive")
+archive_sha256=${archive_sha256_line%% *}
+archive_name=${archive##*/}
+printf '%s  %s\n' "$archive_sha256" "$archive_name" >"$checksum_file"
+
+cat >"$manifest" <<EOF
+project=$project
+suite_version=$suite_version
+planned_tag=$planned_tag
+source_commit=$head_commit
+source_short_commit=$short_commit
+daemon_version=$daemon_version
+plugin_version=$plugin_version
+hyprland_version=$hyprland_version
+hyprland_commit=$hyprland_commit
+archive_sha256=$archive_sha256
+EOF
+
+printf 'archive=%s\n' "$archive"
+printf 'sha256=%s\n' "$archive_sha256"
+printf 'checksum_file=%s\n' "$checksum_file"
+printf 'manifest=%s\n' "$manifest"

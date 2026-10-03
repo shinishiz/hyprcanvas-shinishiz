@@ -19,6 +19,21 @@ one source tree. See [CREDITS.md](CREDITS.md) and
 **Integrated component versions:** Python daemon `1.5.0`; companion plugin
 `0.1`
 
+## Versioning
+
+`hyprcanvas-shinishiz` uses a suite version distinct from the versions of its
+integrated components:
+
+- Suite: `0.1.0`; planned suite tag `gold-v0.1.0` (unreleased).
+- Daemon component: `hyprland-canvas` `1.5.0`.
+- Companion plugin component: `hypr-canvas` `0.1`.
+
+Historical `v1.x` tags in this repository belong to the imported daemon
+history. The plugin's original repository used a `v0.1.0` tag, but that tag was
+intentionally not imported during monorepo consolidation. Neither component
+tag namespace represents releases of this suite. New suite release tags use
+the `gold-v*` namespace.
+
 Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canvas mode per workspace. Runs as an unprivileged user daemon — communicates directly with Hyprland via its IPC socket and Lua API.
 
 <video src="https://github.com/user-attachments/assets/6bb06c3e-c553-481d-b726-15033ed8ac37" autoplay loop muted playsinline width="900">Demo: panning floating windows as an infinite desktop</video>

@@ -1,0 +1,26 @@
+[project]
+name = "hyprcanvas-shinishiz"
+suite_version = "0.1.0"
+planned_tag = "gold-v0.1.0"
+status = "release-preparation"
+
+[maintainer]
+name = "shinishiz"
+email = "shinishiz@outlook.com"
+discord = "shinishi"
+
+[components.daemon]
+name = "hyprland-canvas"
+version = "1.5.0"
+
+[components.plugin]
+name = "hypr-canvas"
+version = "0.1"
+
+[compatibility.hyprland]
+version = "0.56.2"
+commit = "efb50993780079460b0cbed1363e2166a2de1d9f"
+
+[gold_plugin_build]
+sha256 = "ecb0a80ad8fbfbe060413504853742a360c98bf012ed9884f76f0e52371a21c9"
+elf_build_id = "8a27a06aa02a1c5a24f59c6773bb5bd139cc748e"
