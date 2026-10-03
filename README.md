@@ -143,6 +143,9 @@ or, when `XDG_DATA_HOME` is unset:
 `--with-plugin` only builds and installs the file. It does not load the plugin,
 restart the daemon, or reload Hyprland. The Lua integration example performs
 the plugin load during Hyprland startup and tolerates a missing plugin file.
+It prefers the user-local plugin and falls back to the system package path
+`/usr/lib/hyprcanvas-shinishiz/plugins/hypr-canvas.so` when the user-local
+artifact is absent.
 
 **pipx:**
 
@@ -162,9 +165,12 @@ Then install the user integration files:
 uv run canvasd
 ```
 
-The source-only form above is useful for development. The Gold systemd unit
-expects the installed `canvasd` and `canvas-ctl` entry points under
-`~/.local/bin`.
+The source-only form above is useful for development. The user-local systemd
+example expects the Gold wrapper under `~/.local/bin`; the wrappers themselves
+resolve `canvasd` and `canvas-ctl` from `PATH` first and retain
+`~/.local/bin` as a compatibility fallback. A package-manager installation uses
+the separate unit in `packaging/systemd/`, whose `ExecStart` is
+`/usr/bin/hypr-canvasd`.
 
 Merge the Canvas-specific parts from
 [`examples/hyprland-canvas.lua`](examples/hyprland-canvas.lua) into your
@@ -320,6 +326,13 @@ with fallback to:
 
 ```text
 ~/.local/share/hyprcanvas-shinishiz/plugins/hypr-canvas.so
+```
+
+If that user-local artifact is absent, the same example falls back to the
+system package location:
+
+```text
+/usr/lib/hyprcanvas-shinishiz/plugins/hypr-canvas.so
 ```
 
 Use `./scripts/install-user --with-plugin` to build from `plugin/` and install

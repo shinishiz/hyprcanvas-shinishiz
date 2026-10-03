@@ -1,0 +1,84 @@
+# Gold Arch packaging template for hyprcanvas-shinishiz.
+#
+# This is intentionally NOT a final/public PKGBUILD. Before rendering it,
+# Stage 6/7 must supply and verify every @...@ placeholder below against an
+# actual immutable public source archive and an Arch build environment.
+
+pkgname=hyprcanvas-shinishiz
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Hyprland Canvas suite with daemon, integration helpers, and companion plugin"
+arch=('@ARCH@')
+url='@PROJECT_URL@'
+license=('MIT')
+
+# The first three runtime dependency names are inherited from the historical
+# Arch recipe. The additional Gold runtime dependencies used by the wrappers
+# (jq/flock/notify-send) still require exact Arch package-name validation.
+depends=(
+  'hyprland>=0.55'
+  'python>=3.12'
+  'python-yaml'
+  @GOLD_RUNTIME_DEPENDS@
+)
+
+# Python build dependency names below are inherited from the historical recipe.
+# Exact Arch package names needed for the native companion plugin toolchain and
+# its hyprland/pixman/libdrm development metadata remain NEEDS ARCH VALIDATION.
+makedepends=(
+  'python-build'
+  'python-hatchling'
+  'python-installer'
+  'fakeroot'
+  @PLUGIN_MAKEDEPENDS@
+)
+
+source=("$pkgname-$pkgver.tar.gz::@SOURCE_URL@")
+sha256sums=('@SOURCE_SHA256@')
+
+_source_dir='@SOURCE_DIR@'
+
+build() {
+  cd "$srcdir/$_source_dir"
+  python -m build --wheel --no-isolation
+  make -C plugin OUT="$srcdir/hypr-canvas.so" all
+}
+
+package() {
+  cd "$srcdir/$_source_dir"
+
+  python -m installer --destdir="$pkgdir" --prefix=/usr --no-compile-bytecode dist/*.whl
+
+  local wrapper
+  for wrapper in \
+    hypr-canvas-ctl \
+    hypr-canvasd \
+    hypr-canvas-sync-resize \
+    hypr-cycle-mode \
+    hypr-canvas-transition
+  do
+    install -Dm755 "scripts/$wrapper" "$pkgdir/usr/bin/$wrapper"
+  done
+
+  install -Dm644 packaging/systemd/hypr-canvasd.service \
+    "$pkgdir/usr/lib/systemd/user/hypr-canvasd.service"
+  install -Dm755 "$srcdir/hypr-canvas.so" \
+    "$pkgdir/usr/lib/hyprcanvas-shinishiz/plugins/hypr-canvas.so"
+
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 CREDITS.md "$pkgdir/usr/share/doc/$pkgname/CREDITS.md"
+  install -Dm644 THIRD_PARTY.md "$pkgdir/usr/share/doc/$pkgname/THIRD_PARTY.md"
+  install -Dm644 docs/integration.md "$pkgdir/usr/share/doc/$pkgname/integration.md"
+  install -Dm644 docs/release-gold-v0.1.0.md \
+    "$pkgdir/usr/share/doc/$pkgname/release-gold-v0.1.0.md"
+  install -Dm644 examples/hyprland-canvas.lua \
+    "$pkgdir/usr/share/doc/$pkgname/hyprland-canvas.lua"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 plugin/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.plugin"
+}
+
+# provides/conflicts/replaces are intentionally omitted pending Arch validation.
+# The Gold package installs canvasd/canvas-ctl plus the hypr-canvas* wrappers,
+# so collision policy with any historical hyprland-canvas package must be
+# verified before this template becomes a public PKGBUILD.

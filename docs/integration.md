@@ -37,6 +37,11 @@ By default it does not build the companion plugin. Use
 plugin build is desired; that option still does not start or reload runtime
 services.
 
+System packages use the separate user unit
+`packaging/systemd/hypr-canvasd.service`, installed under
+`/usr/lib/systemd/user/`. Its `ExecStart=/usr/bin/hypr-canvasd`; package
+installation must not write into `~/.config/systemd/user/`.
+
 Check status:
 
 ```bash
@@ -57,9 +62,12 @@ Five integration executables are versioned in `scripts/` and installed into
 | `hypr-cycle-mode` | Dwindle → Canvas → Scrolling state machine |
 | `hypr-canvas-transition` | Internal wrapper for stateful transitions |
 
-`hypr-canvasd` and `hypr-canvas-ctl` call the installed Python entry
-points in `~/.local/bin`. The transition/cycle helpers resolve their sibling
-scripts from the same directory, so no username or checkout path is embedded.
+`hypr-canvasd` and `hypr-canvas-ctl` resolve the corresponding `canvasd` and
+`canvas-ctl` Python entry points from `PATH`, then fall back to
+`~/.local/bin/` for compatibility with the user installer. They never search
+for their own wrapper names, so this resolution cannot recurse. The
+transition/cycle helpers resolve their sibling scripts from the same directory,
+so no username or checkout path is embedded.
 
 ## Super+Space Cycle
 
@@ -188,9 +196,11 @@ workspace is in Canvas mode.
 
 The same example preserves the Gold startup ordering. On
 `hyprland.start` it publishes `WAYLAND_DISPLAY`, desktop/session variables,
-and `HYPRLAND_INSTANCE_SIGNATURE` to the user systemd manager, loads
+and `HYPRLAND_INSTANCE_SIGNATURE` to the user systemd manager. It prefers the
+user plugin at
 `${XDG_DATA_HOME:-$HOME/.local/share}/hyprcanvas-shinishiz/plugins/hypr-canvas.so`,
-and then starts
+falls back to `/usr/lib/hyprcanvas-shinishiz/plugins/hypr-canvas.so` when the
+user artifact is absent, and then starts
 `hyprland-session.target`. This is what makes the enabled
 `hypr-canvasd.service` start in the correct Hyprland session.
 
@@ -218,10 +228,12 @@ integration and explicitly build/install the companion plugin with:
 The installed artifact lives at
 `$XDG_DATA_HOME/hyprcanvas-shinishiz/plugins/hypr-canvas.so`, or
 `~/.local/share/hyprcanvas-shinishiz/plugins/hypr-canvas.so` when
-`XDG_DATA_HOME` is unset. The installer does not load it. If the plugin has not
-been installed, the Lua startup keeps going because plugin load failure is
-intentionally tolerated; the Canvas camera/zoom plugin simply remains
-unavailable.
+`XDG_DATA_HOME` is unset. A system package instead installs the plugin at
+`/usr/lib/hyprcanvas-shinishiz/plugins/hypr-canvas.so`. The Lua example checks
+the user path first and then the system path. The installer does not load the
+plugin. If neither artifact exists, the Lua startup keeps going because plugin
+load failure is intentionally tolerated; the Canvas camera/zoom plugin simply
+remains unavailable.
 
 ## EventListener reconnect limitation
 

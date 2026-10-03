@@ -15,7 +15,7 @@ The user installer versions the runtime glue under `scripts/`, installs the
 portable systemd user unit, and leaves Hyprland configuration merging explicit
 via `examples/hyprland-canvas.lua`.
 
-`arch/PKGBUILD` predates the current Gold chain. It still references the older
+`arch/PKGBUILD.legacy` predates the current Gold chain. It still references the older
 `zyrophix/hyprland-canvas` upstream/tag packaging source and must not be
 treated as a reproducible `hyprcanvas-shinishiz` package yet. The public
 repository destination does not exist in this consolidation stage, and the
@@ -51,6 +51,55 @@ Python CLI entry points, five Gold wrappers, the portable user systemd unit and
 integration example, the ABI-matched plugin `.so`, documentation, root
 `LICENSE`, `plugin/LICENSE`, `CREDITS.md`, and `THIRD_PARTY.md`.
 
-`packaging/arch/PKGBUILD` remains the legacy/pre-Gold recipe in this stage. It
-must not be repointed to a nonexistent repository, and a final Gold source URL
-or checksum must not be invented before publication/freeze.
+The legacy recipe is preserved byte-for-byte as `arch/PKGBUILD.legacy`.
+`arch/PKGBUILD.in` is the Gold template. It is intentionally non-final and
+contains explicit `@...@` placeholders for the public source URL/checksum,
+archive root, architecture, and dependency names that still require validation
+in an Arch environment. It must not be published as a final PKGBUILD until all
+placeholders have been resolved from real evidence; `SKIP` is not part of the
+Gold template.
+
+## User-local versus system package paths
+
+The checkout installer remains user-local: wrappers go to `~/.local/bin`, its
+unit goes to `~/.config/systemd/user`, and an optional plugin goes under
+`$XDG_DATA_HOME/hyprcanvas-shinishiz/plugins/`.
+
+The system package model instead stages:
+
+- Python entry points and the five Gold wrappers in `/usr/bin`;
+- `packaging/systemd/hypr-canvasd.service` in `/usr/lib/systemd/user`;
+- the native plugin in `/usr/lib/hyprcanvas-shinishiz/plugins/hypr-canvas.so`;
+- documentation in `/usr/share/doc/hyprcanvas-shinishiz`;
+- both MIT licenses, with distinct filenames, in
+  `/usr/share/licenses/hyprcanvas-shinishiz`.
+
+The Lua example preserves user-local precedence and only selects the system
+plugin when the user-local artifact is absent. Missing both remains tolerated.
+
+Because `hypr-canvas.so` is a native, ABI-sensitive binary, the Gold package
+cannot use `arch=('any')`. The final Arch architecture list and exact package
+names for the plugin build toolchain plus the `jq`/`flock`/`notify-send`
+runtime providers are **NEEDS ARCH VALIDATION**. Fedora package names are not
+substituted into this Arch template.
+
+`canvasd` and `canvas-ctl` are also installed by the historical Python package,
+while Gold adds `hypr-canvasd` and `hypr-canvas-ctl`. That creates a potential
+file/package collision with an installed legacy `hyprland-canvas` package.
+`provides`, `conflicts`, and `replaces` are therefore intentionally omitted
+until the actual Arch legacy-package relationship is verified; no aggressive
+replacement policy is assumed in this stage.
+
+## Validation status
+
+Stage 5B validates the Gold template and package layout locally from a release
+candidate without a remote. The Fedora validation host does not provide
+`makepkg` or `namcap`, so Arch-native package construction and linting remain a
+future gate. The public source URL and public source checksum also remain
+unset until the repository/tag exists. The release itself remains DRAFT /
+UNRELEASED and `release/metadata.toml` remains `release-preparation`.
+
+The historical Git author records that contain the local machine identity are
+not rewritten in Stage 5B. The privacy decision remains pending before public
+repository/tag publication because any history rewrite would change commit
+identities and invalidate frozen source checksums.

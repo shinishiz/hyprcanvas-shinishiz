@@ -12,7 +12,23 @@ local data_home = os.getenv("XDG_DATA_HOME")
 if not data_home or data_home == "" then
     data_home = (os.getenv("HOME") or "") .. "/.local/share"
 end
-local plugin_path = data_home .. "/hyprcanvas-shinishiz/plugins/hypr-canvas.so"
+local user_plugin_path = data_home .. "/hyprcanvas-shinishiz/plugins/hypr-canvas.so"
+local system_plugin_path = "/usr/lib/hyprcanvas-shinishiz/plugins/hypr-canvas.so"
+
+local function file_exists(path)
+    local file = io.open(path, "rb")
+    if not file then return false end
+    file:close()
+    return true
+end
+
+-- Prefer a user-installed ABI match. Fall back to the package-managed plugin.
+-- If neither exists, keep the user path so the tolerant plugin-load command
+-- below fails harmlessly and startup continues exactly as before.
+local plugin_path = user_plugin_path
+if not file_exists(user_plugin_path) and file_exists(system_plugin_path) then
+    plugin_path = system_plugin_path
+end
 
 hl.on("hyprland.start", function()
     hl.exec_cmd([[

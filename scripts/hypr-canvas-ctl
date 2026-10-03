@@ -3,4 +3,17 @@
 
 set -eu
 
-exec "$HOME/.local/bin/canvas-ctl" "$@"
+backend=$(command -v canvas-ctl 2>/dev/null || true)
+if [ -n "$backend" ] && [ -x "$backend" ]; then
+    exec "$backend" "$@"
+fi
+
+if [ -n "${HOME:-}" ]; then
+    backend="$HOME/.local/bin/canvas-ctl"
+    if [ -x "$backend" ]; then
+        exec "$backend" "$@"
+    fi
+fi
+
+printf '%s\n' 'hypr-canvas-ctl: unable to find canvas-ctl in PATH or ~/.local/bin' >&2
+exit 127
