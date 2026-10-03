@@ -1075,10 +1075,7 @@ def test_window_move_transfer_then_closewindow_cleans_destination_ownership():
     nav, _ipc = _make_clean_move_nav()
     nav._canvas_mode_workspaces = {2: {"0xabc": {}}, 6: {}}
     with patch("canvas.navigation.toggle_state.save"):
-        assert (
-            nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
-            == "RECONCILED"
-        )
+        assert nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6)) == "RECONCILED"
 
     nav.unregister_window("0xabc")
 

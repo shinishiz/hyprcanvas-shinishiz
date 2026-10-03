@@ -8,6 +8,7 @@ import signal
 import socket
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from canvas import debug
@@ -32,6 +33,7 @@ _VALID_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 _MAX_OPENWINDOW_RETRIES = 3
 _OPENWINDOW_RETRY_DELAY = 0.05  # 50ms
 _EVENT_RECONNECT_DELAYS = (0.25, 0.5, 1.0, 2.0, 5.0)
+
 
 def _lua_escape(s: str) -> str:
     """Escape a string for safe interpolation into a Lua double-quoted literal."""
@@ -169,9 +171,7 @@ class EventListener:
             if self._stop_event.is_set():
                 break
 
-            delay = _EVENT_RECONNECT_DELAYS[
-                min(failure_count, len(_EVENT_RECONNECT_DELAYS) - 1)
-            ]
+            delay = _EVENT_RECONNECT_DELAYS[min(failure_count, len(_EVENT_RECONNECT_DELAYS) - 1)]
             if connected:
                 # A successful connection resets the backoff, so any later
                 # disconnect retries quickly.
@@ -231,8 +231,7 @@ class EventListener:
             (
                 c
                 for c in clients
-                if isinstance(c, dict)
-                and _normalize_address(str(c.get("address", ""))) == addr
+                if isinstance(c, dict) and _normalize_address(str(c.get("address", ""))) == addr
             ),
             None,
         )
@@ -363,7 +362,7 @@ class EventListener:
             f"for _, win in ipairs(ws) do\n"
             f'  if tostring(win.address) == "{addr}" then\n'
             f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.float("
-            f"{{ action = \"toggle\", window = win }})))\n"
+            f'{{ action = "toggle", window = win }})))\n'
             f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.resize("
             f"{{ x = {w}, y = {h}, relative = false, window = win }})))\n"
             f"    _canvas_dispatch(hl.dispatch(hl.dsp.window.move("
@@ -541,7 +540,7 @@ class DaemonState:
 
             handler_name = self._IPC_DISPATCH.get(command)
             if handler_name is not None:
-                handler = getattr(self, handler_name)
+                handler: Callable[..., str] = getattr(self, handler_name)
                 if command in {"CANVAS_TOGGLE", "CANVAS_TOGGLE_ALL"}:
                     result = handler(workspace_id)
                 else:
@@ -754,9 +753,7 @@ class DaemonState:
         self.edge_scroll_workspace = ws_id
         viewport = self._canvas_viewport(ws_id)
         if viewport.enabled:
-            self.edge_scroll.set_viewport(
-                viewport.zoom, viewport.offset_x, viewport.offset_y
-            )
+            self.edge_scroll.set_viewport(viewport.zoom, viewport.offset_x, viewport.offset_y)
         else:
             self.edge_scroll.set_viewport(1.0, 0.0, 0.0)
         if not self._fetch_monitor_rect():

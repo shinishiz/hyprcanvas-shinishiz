@@ -265,9 +265,7 @@ class Navigator:
                 if geo and not self._restore_tiled_geometry_as_floating(
                     destination_workspace_id, target
                 ):
-                    self._set_snapshot_floating(
-                        destination_workspace_id, target, floating=False
-                    )
+                    self._set_snapshot_floating(destination_workspace_id, target, floating=False)
                     try:
                         self._persist_canvas_state(
                             self._canvas_mode_workspaces, self._floating_geos
@@ -345,9 +343,7 @@ class Navigator:
         if not runtime_ok:
             if persistent_changed:
                 try:
-                    self._persist_canvas_state(
-                        self._canvas_mode_workspaces, self._floating_geos
-                    )
+                    self._persist_canvas_state(self._canvas_mode_workspaces, self._floating_geos)
                 except toggle_state.ToggleStateError as exc:
                     log.error("movewindowv2: state rollback failed: %s", exc)
                     return "ERROR:STATE_ROLLBACK_FAILED"
@@ -668,11 +664,10 @@ class Navigator:
 
         if not self._set_all_floating(workspace_id, floating=True):
             failure = "ERROR:FLOAT_FAILED"
-        elif (
-            not self._restore_tiled_geometry_as_floating(workspace_id, tiled_snapshot)
-            or not self._restore_floating_geos(
-                workspace_id, exclude_addresses=set(tiled_snapshot.keys())
-            )
+        elif not self._restore_tiled_geometry_as_floating(
+            workspace_id, tiled_snapshot
+        ) or not self._restore_floating_geos(
+            workspace_id, exclude_addresses=set(tiled_snapshot.keys())
         ):
             failure = "ERROR:GEOMETRY_RESTORE_FAILED"
         else:
@@ -1366,12 +1361,7 @@ class Navigator:
                     transform = int(monitor["transform"])
                 except (KeyError, TypeError, ValueError):
                     continue
-                if (
-                    pixel_width <= 0
-                    or pixel_height <= 0
-                    or not math.isfinite(scale)
-                    or scale <= 0
-                ):
+                if pixel_width <= 0 or pixel_height <= 0 or not math.isfinite(scale) or scale <= 0:
                     continue
                 if transform % 2 == 1:
                     pixel_width, pixel_height = pixel_height, pixel_width

@@ -742,9 +742,7 @@ def test_edge_scroll_move_zero_delta_is_noop():
     ipc.eval_lua.assert_not_called()
 
 
-def _make_event_listener(
-    navigator: MagicMock | None = None, ipc: MagicMock | None = None
-):
+def _make_event_listener(navigator: MagicMock | None = None, ipc: MagicMock | None = None):
     stop_event = threading.Event()
     nav = navigator or MagicMock()
     if ipc is None:
