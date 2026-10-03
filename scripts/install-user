@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+bin_dir="$HOME/.local/bin"
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+install -d "$bin_dir" "$unit_dir"
+
+for name in \
+    hypr-canvas-ctl \
+    hypr-canvasd \
+    hypr-canvas-sync-resize \
+    hypr-cycle-mode \
+    hypr-canvas-transition
+do
+    install -m755 "$repo_dir/scripts/$name" "$bin_dir/$name"
+done
+
+install -m644 \
+    "$repo_dir/examples/hypr-canvasd.service" \
+    "$unit_dir/hypr-canvasd.service"
+
+printf '%s\n' "Installed Canvas user integration:"
+printf '  %s\n' "$bin_dir"/hypr-canvas-ctl
+printf '  %s\n' "$bin_dir"/hypr-canvasd
+printf '  %s\n' "$bin_dir"/hypr-canvas-sync-resize
+printf '  %s\n' "$bin_dir"/hypr-cycle-mode
+printf '  %s\n' "$bin_dir"/hypr-canvas-transition
+printf '  %s\n' "$unit_dir/hypr-canvasd.service"
+printf '%s\n' "Merge examples/hyprland-canvas.lua into your Hyprland Lua config separately."

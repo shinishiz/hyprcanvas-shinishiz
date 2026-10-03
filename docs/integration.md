@@ -14,7 +14,7 @@ PartOf=hyprland-session.target
 
 [Service]
 Type=simple
-ExecStart=/home/youruser/.local/bin/hypr-canvasd
+ExecStart=%h/.local/bin/hypr-canvasd
 Restart=on-failure
 RestartSec=1
 
@@ -29,6 +29,10 @@ systemctl --user daemon-reload
 systemctl --user enable --now hypr-canvasd.service
 ```
 
+The repository ships this unit as `examples/hypr-canvasd.service`.
+`./scripts/install-user` installs it and the Gold helper scripts into the
+current user's home without starting or reloading anything by itself.
+
 Check status:
 
 ```bash
@@ -38,15 +42,20 @@ journalctl --user -u hypr-canvasd -f
 
 ## Wrappers
 
-Three wrappers are provided in `~/.local/bin/`:
+Five integration executables are versioned in `scripts/` and installed into
+`~/.local/bin/`:
 
 | Script | Purpose |
 |--------|---------|
 | `hypr-canvasd` | Launch the daemon |
 | `hypr-canvas-ctl` | Control CLI (ping, status, toggle, nav, etc.) |
+| `hypr-canvas-sync-resize` | Keep `general:resize_on_border` aligned with active Canvas state |
+| `hypr-cycle-mode` | Dwindle → Canvas → Scrolling state machine |
 | `hypr-canvas-transition` | Internal wrapper for stateful transitions |
 
-All use `uv run --directory /path/to/project python -m canvas ...` for isolation.
+`hypr-canvasd` and `hypr-canvas-ctl` call the installed Python entry
+points in `~/.local/bin`. The transition/cycle helpers resolve their sibling
+scripts from the same directory, so no username or checkout path is embedded.
 
 ## Super+Space Cycle
 
@@ -92,6 +101,29 @@ State is persisted per-workspace in `$XDG_RUNTIME_DIR/canvas/toggle-state.json`.
 | SUPER+SHIFT+UP | `nav-up` | `window.move up` | (none) |
 | SUPER+SHIFT+DOWN | `nav-down` | `window.move down` | (none) |
 
+## Relative workspace move + follow
+
+The Gold Lua integration also includes the manually validated relative move
+helper:
+
+```lua
+local function move_focused_window_relative(delta)
+    local ws = hl.get_active_workspace()
+    if not ws or ws.special then return end
+
+    local target = ws.id + delta
+    if target < 1 then return end
+
+    hl.dispatch(hl.dsp.window.move({ workspace = tostring(target) }))
+end
+
+hl.bind("SUPER + ALT + 0", function() move_focused_window_relative(1) end)
+hl.bind("SUPER + SHIFT + 0", function() move_focused_window_relative(-1) end)
+```
+
+There is no upper workspace limit: workspace 9 can move to 10, 10 to 11, and
+so on. Moving backward from workspace 1 is a no-op.
+
 ## Canvas toggle & single window
 
 | Bind | Action |
@@ -120,7 +152,7 @@ When Canvas is active on a workspace, newly opened tiled windows are automatical
 1. Detected via socket2 `openwindow` event
 2. Queried for geometry via `j/clients`
 3. Converted to floating via `window.float toggle`
-4. Resized/positioned to median geometry from original tiled snapshot
+4. Sized from the original tiled snapshot's median geometry and positioned at the visual Canvas viewport center
 5. Registered in `_spawned_during_canvas` for proper cleanup on Canvas OFF
 
 ## State persistence
@@ -140,24 +172,47 @@ State is stored in `$XDG_RUNTIME_DIR/canvas/toggle-state.json` (daemon) and `$XD
 
 ## Hyprland Lua helpers
 
-```lua
--- Check if Canvas is active on current workspace
-local function is_canvas_active_now()
-    local ws = hl.get_active_workspace()
-    if not ws or ws.special then return false end
-    return is_canvas_confirmed_active(ws.id)
-end
+Use `examples/hyprland-canvas.lua` as the canonical distributable extraction
+of the Gold bindings. It reads the persisted `toggle-state.json`, installs the
+workspace/config resize synchronization callbacks, keeps the validated
+`move_focused_window_relative(delta)` implementation, and contains the
+`SUPER+SPACE`, mouse, navigation, toggle, invert, and zoom-reset binds.
 
--- Toggle Canvas for current workspace
-local function toggle_canvas_for_current_workspace()
-    local ws = hl.get_active_workspace()
-    if not ws or ws.special then return end
-    local ws_id = ws.id
-    local currently_active = canvas_active_by_workspace[ws_id] or false
-    canvas_active_by_workspace[ws_id] = not currently_active
-    hl.dsp.exec_cmd("/home/youruser/.local/bin/hypr-canvas-ctl canvas-toggle")
-end
+Keep `general.resize_on_border = false` in the base Hyprland configuration.
+The synchronizer is responsible for temporarily enabling it while the active
+workspace is in Canvas mode.
+
+The same example preserves the Gold startup ordering. On
+`hyprland.start` it publishes `WAYLAND_DISPLAY`, desktop/session variables,
+and `HYPRLAND_INSTANCE_SIGNATURE` to the user systemd manager, loads
+`~/.local/lib/hypr-canvas/hypr-canvas.so`, and then starts
+`hyprland-session.target`. This is what makes the enabled
+`hypr-canvasd.service` start in the correct Hyprland session.
+
+## Companion plugin ABI
+
+The Canvas camera/zoom bridge depends on the separate `hypr-canvas` plugin.
+The Gold plugin was built against Hyprland 0.56.2 headers. Because the plugin
+exports the `HYPRLAND_API_VERSION` from those headers and hooks Hyprland
+internals, rebuild it against the matching development headers on the target
+machine. Do not assume a binary built for another Hyprland ABI is reusable.
+
+Install the resulting artifact at the location used by the Gold example:
+
+```bash
+install -Dm755 hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
 ```
+
+The plugin source/build is still outside this daemon repository, so packaging
+is not fully self-contained until the Gold consolidation chooses how to ship
+that companion component.
+
+## EventListener reconnect limitation
+
+Transport recovery reconnects the socket2 EventListener after a disconnect.
+Events emitted while the listener is disconnected are not replayed. This is a
+known limitation of the current Gold base; a separate reconciler stage would be
+needed to guarantee recovery of those missed lifecycle events.
 
 ## Troubleshooting
 

@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Stable wrapper name used by the Gold systemd unit.
+
+set -eu
+
+exec "$HOME/.local/bin/canvasd" "$@"

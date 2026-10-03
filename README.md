@@ -17,8 +17,8 @@ Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canva
 This fork adds the following improvements over the upstream:
 
 - **Automatic handling of windows opened while Canvas is active** — newly opened tiled windows automatically become part of the Canvas (become floating with sensible geometry)
-- **Socket2 event listener** — real-time window creation events via Hyprland's `.socket2.sock`
-- **Sensible spawn geometry** — new windows use median geometry from original tiled snapshot
+- **Socket2 event listener** — real-time window lifecycle events via Hyprland's `.socket2.sock`, with transport reconnect recovery
+- **Viewport-aware spawn geometry** — new windows use the tiled snapshot's median size and spawn at the visual Canvas viewport center
 - **Restoration to tiled state** — when leaving Canvas, windows return to their tiled positions correctly
 - **Safer address normalization** — robust window address handling between socket2 events and j/clients
 - **Hyprland 0.56.2 compatibility** — updated for API changes in 0.56.2
@@ -47,62 +47,33 @@ via **Super + Space**:
 
 ## Keybinds
 
-```lua
--- Canvas: pan (mouse binds)
-hl.bind("SUPER + SHIFT + mouse:272", function()
-    os.execute("canvas-ctl pan-start")
-end, { mouse = true })
+The complete Gold integration is versioned in
+[`examples/hyprland-canvas.lua`](examples/hyprland-canvas.lua). It includes
+the state helpers, `SUPER+SPACE` cycle, conditional Canvas navigation, zoom
+reset, border-resize synchronization, and the validated relative workspace
+movement:
 
-hl.bind("SUPER + SHIFT + mouse:272", function()
-    os.execute("canvas-ctl pan-stop")
-end, { mouse = true, release = true })
-
--- Canvas: edge-scroll (drag window to screen edge → camera follows)
-hl.bind("SUPER + mouse:272", function()
-    hl.dispatch(hl.dsp.window.drag())
-    hl.exec_cmd("canvas-ctl edge-start")
-end, { mouse = true })
-
-hl.bind("SUPER + mouse:272", function()
-    hl.exec_cmd("canvas-ctl edge-stop")
-end, { mouse = true, release = true })
-
--- Canvas: center view on the floating window under the cursor
-hl.bind("SUPER + mouse:274", function()
-    hl.exec_cmd("canvas-ctl center-cursor")
-end, { mouse = true })
-
--- Canvas: navigation (4-dir spatial)
-hl.bind("SUPER + SHIFT + left", function()
-    os.execute("canvas-ctl nav-left")
-end)
-hl.bind("SUPER + SHIFT + right", function()
-    os.execute("canvas-ctl nav-right")
-end)
-hl.bind("SUPER + SHIFT + up", function()
-    os.execute("canvas-ctl nav-up")
-end)
-hl.bind("SUPER + SHIFT + down", function()
-    os.execute("canvas-ctl nav-down")
-end)
-
--- Canvas: toggle & invert
-hl.bind("SUPER + SHIFT + V", function()
-    os.execute("canvas-ctl canvas-toggle-single")
-end)
-hl.bind("SUPER + SHIFT + G", function()
-    os.execute("canvas-ctl toggle")
-end)
-
--- Super+Space: Cycle workspace mode (Dwindle → Canvas → Scrolling → Dwindle)
-hl.bind("SUPER + SPACE", cycle_mode)
-```
-
-Note: `SUPER+SHIFT+C` (canvas toggle) is intentionally omitted — the `SUPER+SPACE` cycle replaces it for a more intuitive workflow.
+| Bind | Action |
+| --- | --- |
+| SUPER+ALT+0 | Move the focused window to current workspace + 1 and follow it |
+| SUPER+SHIFT+0 | Move the focused window to current workspace - 1 and follow it; no-op below workspace 1 |
+| SUPER+SPACE | Cycle Dwindle → Canvas → Scrolling → Dwindle |
+| SUPER+SHIFT+LMB | Pan Canvas |
+| SUPER+LMB | Drag window with edge-scroll |
+| SUPER+MMB | Center on the window under the cursor |
+| SUPER+SHIFT+Arrows | Canvas spatial navigation, otherwise current layout movement |
+| SUPER+SHIFT+V | Toggle focused window floating/tiled |
+| SUPER+SHIFT+G | Invert pan direction |
+| SUPER+0 | Reset Canvas zoom |
 
 ## Installation
 
-Requires: Hyprland 0.55+ (Lua config with `hl.*` API), Python 3.12+, `uv`, `pipx`, or Arch `makepkg`.
+The Gold integration is validated against Hyprland **0.56.2**. The companion
+`hypr-canvas` plugin is ABI-sensitive and must be built against the headers
+for the Hyprland version that will load it. The daemon requires Python 3.12+.
+
+Runtime integration also uses `jq`, `flock` (util-linux), and
+`notify-send` (libnotify).
 
 **uv (recommended):**
 
@@ -110,6 +81,12 @@ Requires: Hyprland 0.55+ (Lua config with `hl.*` API), Python 3.12+, `uv`, `pipx
 git clone https://github.com/shinishiz/hyprland-canvas.git
 cd hyprland-canvas
 uv tool install .
+```
+
+Install the versioned user integration wrappers and systemd unit:
+
+```bash
+./scripts/install-user
 ```
 
 **pipx:**
@@ -120,6 +97,12 @@ cd hyprland-canvas
 pipx install .
 ```
 
+Then install the user integration files:
+
+```bash
+./scripts/install-user
+```
+
 **Run from source (no install):**
 
 ```bash
@@ -128,11 +111,23 @@ cd hyprland-canvas
 uv run canvasd
 ```
 
-After pulling new code, reinstall and restart the daemon:
+The source-only form above is useful for development. The Gold systemd unit
+expects the installed `canvasd` and `canvas-ctl` entry points under
+`~/.local/bin`.
+
+Merge the Canvas-specific parts from
+[`examples/hyprland-canvas.lua`](examples/hyprland-canvas.lua) into your
+Hyprland Lua configuration and keep `general.resize_on_border = false` as the
+base value. The synchronizer enables it only while the active workspace is in
+Canvas mode. The example also preserves the Gold startup order: export the
+Hyprland session environment to systemd, load the companion plugin, then start
+`hyprland-session.target`.
+
+After updating the daemon package, reinstall it before restarting the service:
 
 ```bash
-git pull
 uv tool install . --force --reinstall   # or: pipx install . --force
+./scripts/install-user
 ```
 
 ## Quickstart
@@ -152,14 +147,15 @@ PONG
 canvas-ctl status    # show pan direction and state
 ```
 
-Then add the Hyprland keybinds from above and drag with SUPER+SHIFT+LMB.
+Then merge `examples/hyprland-canvas.lua` into your Hyprland Lua config and
+drag with SUPER+SHIFT+LMB.
 
 ## Control commands
 
 The full list lives in the CLI itself — `canvas-ctl --help` is canonical:
 
 ```bash
-canvas-ctl --help  # all 15 commands with one-line descriptions
+canvas-ctl --help  # all commands with one-line descriptions
 canvas-ctl ping    # check if daemon is running
 canvas-ctl status  # show pan direction and state
 ```
@@ -200,6 +196,9 @@ at daemon startup with the exact offending keys listed on stderr.
 - `tests/` — mocked pytest suite, no live compositor needed (`uv run pytest`)
 - `docs/` — [architecture.md](docs/architecture.md): process model, IPC, config load
 - `docs/` — [debugging.md](docs/debugging.md): logs, tracing, common failures
+- `examples/hyprland-canvas.lua` — distributable Gold Hyprland integration
+- `examples/hypr-canvasd.service` — portable systemd user unit
+- `scripts/` — versioned Gold wrappers/state-machine helpers plus user installer
 - `config.yml` — ready-to-copy config template
 - `pyproject.toml` — package metadata, pytest/ruff/mypy config
 
@@ -217,25 +216,15 @@ at daemon startup with the exact offending keys listed on stderr.
 | SUPER+SHIFT+Arrows navigation (conditional) | ✅ Implemented |
 | SUPER+SHIFT+V (single window toggle) | ✅ Implemented |
 | SUPER+SHIFT+G (invert pan) | ✅ Implemented |
+| SUPER+ALT+0 / SUPER+SHIFT+0 relative workspace move + follow | ✅ Gold-validated |
 | Hyprland 0.56.2 compatibility | ✅ Updated |
 
 ## systemd user service
 
-```ini
-# ~/.config/systemd/user/hypr-canvasd.service
-[Unit]
-Description=Hyprland Canvas daemon
-PartOf=hyprland-session.target
-
-[Service]
-Type=simple
-ExecStart=/home/youruser/.local/bin/hypr-canvasd
-Restart=on-failure
-RestartSec=1
-
-[Install]
-WantedBy=hyprland-session.target
-```
+`./scripts/install-user` copies the portable unit from
+[`examples/hypr-canvasd.service`](examples/hypr-canvasd.service) to
+`~/.config/systemd/user/hypr-canvasd.service`. It uses the systemd `%h`
+specifier instead of a hard-coded username.
 
 Enable and start:
 
@@ -244,11 +233,45 @@ systemctl --user daemon-reload
 systemctl --user enable --now hypr-canvasd.service
 ```
 
-Wrappers (included in repo, install to `~/.local/bin/`):
+The installer puts these versioned files in `~/.local/bin/`:
 
 - `hypr-canvasd` — daemon launcher
 - `hypr-canvas-ctl` — control CLI
+- `hypr-canvas-sync-resize` — synchronizes global border resize with active Canvas state
+- `hypr-cycle-mode` — Dwindle/Canvas/Scrolling state machine
 - `hypr-canvas-transition` — stateful transition wrapper
+
+## Companion plugin and ABI
+
+The camera/zoom integration also requires the separate `hypr-canvas` plugin.
+The Gold plugin build was produced for Hyprland 0.56.2 and returns
+`HYPRLAND_API_VERSION` from the headers used at compile time. Treat its
+`.so` as ABI-coupled to that Hyprland build; rebuild the plugin against the
+target machine's matching Hyprland development headers instead of reusing a
+binary across incompatible Hyprland versions.
+
+The distributable Lua example expects the ABI-matched plugin at:
+
+```text
+~/.local/lib/hypr-canvas/hypr-canvas.so
+```
+
+After building the companion plugin, install its artifact there:
+
+```bash
+install -Dm755 hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
+```
+
+The current Gold plugin source is still maintained separately, so a future
+consolidated release must decide how that source/build is shipped before a
+clean install can be called fully self-contained.
+
+## Known runtime limitation
+
+The socket2 EventListener reconnects after transport failure. Events emitted
+during the disconnected interval are not replayed, so lifecycle state can miss
+an event until a later operation reconciles it. This is a known Gold limitation
+and should remain documented unless a separate reconciler stage closes the gap.
 
 ## Updating from upstream
 
@@ -279,12 +302,13 @@ uv run ruff check .
 uv run mypy canvas
 ```
 
-247 tests passing, 80.17% coverage.
+321 tests passing, 82.43% coverage.
 
 ## Credits
 
 - Original: [zyrophix/hyprland-canvas](https://github.com/zyrophix/hyprland-canvas)
 - Fork maintained by: shinishiz
+- Companion plugin: [Aaron Bockelie / aaronsb/hypr-canvas](https://github.com/aaronsb/hypr-canvas) — MIT, maintained separately
 
 ## License
 

@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -u
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+canvas_dir="$runtime_dir/canvas"
+state_path="$canvas_dir/toggle-state.json"
+lock_path="$canvas_dir/resize-sync.lock"
+max_attempts=3
+
+error() {
+    printf 'hypr-canvas-sync-resize: %s\n' "$*" >&2
+}
+
+apply_resize() {
+    local value="$1" response response_lower rc option_json actual
+
+    case "$value" in
+        true|false)
+            ;;
+        *)
+            error "invalid resize value: $value"
+            return 1
+            ;;
+    esac
+
+    response="$(hyprctl eval "hl.config({ general = { resize_on_border = $value } })" 2>&1)"
+    rc=$?
+    if (( rc != 0 )); then
+        error "hyprctl eval failed for general:resize_on_border=$value"
+        [[ -z "$response" ]] || printf '%s\n' "$response" >&2
+        return 1
+    fi
+
+    response_lower="$(printf '%s' "$response" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$response_lower" == *"error"* ||
+          "$response_lower" == *"failed"* ||
+          "$response_lower" == *"cannot"* ||
+          "$response_lower" == *"can't"* ||
+          "$response_lower" == *"invalid"* ||
+          "$response_lower" == *"unknown"* ]]; then
+        error "hyprctl eval reported failure for general:resize_on_border=$value"
+        [[ -z "$response" ]] || printf '%s\n' "$response" >&2
+        return 1
+    fi
+
+    if ! option_json="$(hyprctl -j getoption general:resize_on_border)"; then
+        error "failed to read back general:resize_on_border"
+        return 1
+    fi
+
+    if ! actual="$(jq -r '
+        if .bool == true then "true"
+        elif .bool == false then "false"
+        else empty
+        end
+    ' <<<"$option_json")"; then
+        error "failed to parse general:resize_on_border read-back"
+        return 1
+    fi
+
+    case "$actual" in
+        true|false)
+            ;;
+        *)
+            error "invalid general:resize_on_border read-back"
+            return 1
+            ;;
+    esac
+
+    if [[ "$actual" != "$value" ]]; then
+        error "canvas resize sync failed: expected=$value actual=$actual"
+        return 1
+    fi
+}
+
+read_active_workspace() {
+    local workspace_json ws_id
+
+    workspace_json="$(hyprctl -j activeworkspace 2>/dev/null)" || return 1
+    ws_id="$(jq -r '
+        if (.id | type) == "number" and .id > 0 then
+            (.id | tostring)
+        else
+            empty
+        end
+    ' <<<"$workspace_json" 2>/dev/null)" || return 1
+
+    [[ -n "$ws_id" ]] || return 1
+    printf '%s\n' "$ws_id"
+}
+
+read_canvas_state() {
+    local ws_id="$1" value
+
+    [[ -r "$state_path" ]] || return 1
+    value="$(jq -r --arg ws "$ws_id" '
+        (if has($ws) and (.[$ws] | type) == "object" then
+            (.[$ws].active // false)
+        else
+            false
+        end)
+        | if . == true then "true"
+          elif . == false then "false"
+          else error("invalid Canvas active state")
+          end
+    ' "$state_path" 2>/dev/null)" || return 1
+
+    case "$value" in
+        true|false)
+            printf '%s\n' "$value"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+if ! mkdir -p "$canvas_dir"; then
+    error "cannot create runtime directory: $canvas_dir"
+    exit 1
+fi
+
+if ! exec 9>"$lock_path"; then
+    error "cannot open lock: $lock_path"
+    exit 1
+fi
+
+if ! flock -x 9; then
+    error "cannot acquire lock: $lock_path"
+    exit 1
+fi
+
+for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if ! ws_before="$(read_active_workspace)"; then
+        apply_resize false || exit 1
+        error "active workspace is unavailable or not a normal workspace; forced false"
+        exit 1
+    fi
+
+    state_ok=true
+    if ! resize_value="$(read_canvas_state "$ws_before")"; then
+        resize_value=false
+        state_ok=false
+    fi
+
+    apply_resize "$resize_value" || exit 1
+
+    if ! ws_after="$(read_active_workspace)"; then
+        apply_resize false || exit 1
+        error "active workspace changed or became unavailable during sync; forced false"
+        exit 1
+    fi
+
+    if [[ "$ws_after" == "$ws_before" ]]; then
+        if [[ "$state_ok" == true ]]; then
+            exit 0
+        fi
+
+        error "Canvas state is unavailable or invalid for workspace $ws_before; forced false"
+        exit 1
+    fi
+done
+
+apply_resize false || exit 1
+error "active workspace did not stabilize after $max_attempts attempts; forced false"
+exit 1

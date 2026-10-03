@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+Wrapper for hyprland-canvas transitions with confirmation and locking.
+
+Usage:
+    hypr-canvas-transition WORKSPACE_ID EXPECTED_ACTIVE MODE_NAME LOCK_PATH CACHE_PATH
+
+Example:
+    hypr-canvas-transition 9 true Canvas $XDG_RUNTIME_DIR/canvas/super-space-9.lock $XDG_RUNTIME_DIR/canvas/super-space-state-9
+"""
+
+import json
+import os
+import sys
+import tempfile
+import fcntl
+import subprocess
+import signal
+import time
+
+BIN_DIR = os.path.dirname(os.path.realpath(__file__))
+CANVAS_CTL = os.path.join(BIN_DIR, "hypr-canvas-ctl")
+SYNC_RESIZE = os.path.join(BIN_DIR, "hypr-canvas-sync-resize")
+NOTIFY_SEND = "/usr/bin/notify-send"
+
+
+def main():
+    if len(sys.argv) != 6:
+        print(f"Usage: {sys.argv[0]} WORKSPACE_ID EXPECTED_ACTIVE MODE_NAME LOCK_PATH CACHE_PATH", file=sys.stderr)
+        sys.exit(1)
+
+    workspace_id = sys.argv[1]
+    expected_active = sys.argv[2].lower() == "true"
+    mode_name = sys.argv[3]
+    lock_path = sys.argv[4]
+    cache_path = sys.argv[5]  # This is the cache path (super-space-state-<ws>), NOT toggle-state.json
+
+    # Open lock file
+    lock_fd = None
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, BlockingIOError) as e:
+        # Lock already held - another transition is in progress
+        sys.exit(1)
+
+    # Ensure cleanup on exit
+    def cleanup():
+        if lock_fd:
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                lock_fd.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(lock_path)
+            except Exception:
+                pass
+
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(1))
+    signal.signal(signal.SIGHUP, lambda *_: sys.exit(1))
+
+    def toggle_state_path():
+        """Get the toggle-state.json path (READ-ONLY)."""
+        uid = os.getuid()
+        run_dir = f"/run/user/{uid}"
+        base = run_dir if os.path.isdir(run_dir) else os.environ.get("XDG_RUNTIME_DIR", f"/tmp/user/{uid}")
+        return os.path.join(base, "canvas", "toggle-state.json")
+
+    def notify(mode):
+        """Send notification via notify-send."""
+        try:
+            subprocess.run(["/usr/bin/notify-send", mode], check=False)
+        except Exception:
+            pass
+
+    try:
+        # Execute canvas-toggle
+        result = subprocess.run(
+            [CANVAS_CTL, "canvas-toggle", workspace_id],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            # Toggle failed
+            subprocess.run(["/usr/bin/notify-send", "Error"], check=False)
+            sys.exit(1)
+
+        # Read toggle-state.json to confirm state (READ-ONLY)
+        state_path = toggle_state_path()
+        if not state_path:
+            subprocess.run(["/usr/bin/notify-send", "Error"], check=False)
+            sys.exit(1)
+
+        # Read and confirm state
+        max_attempts = 5
+        confirmed = False
+        for _ in range(max_attempts):
+            try:
+                with open(state_path, "r") as f:
+                    state_data = json.load(f)
+                ws_state = state_data.get(str(workspace_id))
+                if ws_state and isinstance(ws_state, dict):
+                    active = ws_state.get("active", False)
+                    if active == expected_active:
+                        confirmed = True
+                        break
+            except (FileNotFoundError, json.JSONDecodeError, KeyError):
+                pass
+            time.sleep(0.05)
+
+        if not confirmed:
+            subprocess.run(["/usr/bin/notify-send", "Error"], check=False)
+            sys.exit(1)
+
+        # Reconcile the global resize setting from the workspace that is active
+        # now. The synchronizer owns the true/false decision.
+        sync_result = subprocess.run([SYNC_RESIZE], check=False)
+        sync_failed = sync_result.returncode != 0
+        if sync_failed:
+            print(
+                f"hypr-canvas-transition: resize sync failed (exit {sync_result.returncode})",
+                file=sys.stderr,
+            )
+
+        # Write cache state file atomically (NOT toggle-state.json!)
+        state_value = "1" if expected_active else "0"
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(cache_path), delete=False) as tmp:
+                tmp.write(state_value)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_name = tmp.name
+            os.replace(tmp_name, cache_path)
+        except Exception:
+            sys.exit(1)
+
+        if sync_failed:
+            subprocess.run(["/usr/bin/notify-send", "Error"], check=False)
+            sys.exit(1)
+
+        # Notify success
+        subprocess.run(["/usr/bin/notify-send", mode_name], check=False)
+
+    finally:
+        # Cleanup lock
+        if lock_fd:
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                lock_fd.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(lock_path)
+            except Exception:
+                pass
+
+
+def toggle_state_path():
+    """Get the toggle-state.json path (READ-ONLY)."""
+    uid = os.getuid()
+    run_dir = f"/run/user/{uid}"
+    base = run_dir if os.path.isdir(run_dir) else os.environ.get("XDG_RUNTIME_DIR", f"/tmp/user/{uid}")
+    return os.path.join(base, "canvas", "toggle-state.json")
+
+
+if __name__ == "__main__":
+    main()

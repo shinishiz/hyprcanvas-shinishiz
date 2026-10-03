@@ -7,7 +7,7 @@ PartOf=hyprland-session.target
 
 [Service]
 Type=simple
-ExecStart=/home/youruser/.local/bin/hypr-canvasd
+ExecStart=%h/.local/bin/hypr-canvasd
 Restart=on-failure
 RestartSec=1
 

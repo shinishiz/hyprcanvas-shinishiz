@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -u
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+canvas_dir="$runtime_dir/canvas"
+toggle_state="$canvas_dir/toggle-state.json"
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+mkdir -p "$canvas_dir"
+
+workspace_json="$(hyprctl -j activeworkspace 2>/dev/null)" || exit 1
+ws_id="$(jq -r '.id' <<<"$workspace_json")"
+ws_name="$(jq -r '.name' <<<"$workspace_json")"
+layout="$(jq -r '.tiledLayout // ""' <<<"$workspace_json")"
+fullscreen="$(jq -r '.hasfullscreen // false' <<<"$workspace_json")"
+
+if [[ -z "$ws_id" || "$ws_id" == "null" ]]; then
+    exit 1
+fi
+
+if [[ "$fullscreen" == "true" || "$fullscreen" == "1" ]]; then
+    /usr/bin/notify-send Error
+    exit 0
+fi
+
+cycle_lock="$canvas_dir/super-space-cycle-$ws_id.lock"
+exec 9>"$cycle_lock"
+if ! flock -n 9; then
+    exit 0
+fi
+
+canvas_active="false"
+if [[ -f "$toggle_state" ]]; then
+    canvas_active="$(jq -r --arg ws "$ws_id" '.[$ws].active // false' "$toggle_state" 2>/dev/null || printf 'false')"
+fi
+
+transition_lock="$canvas_dir/super-space-$ws_id.lock"
+cache_path="$canvas_dir/super-space-state-$ws_id"
+
+set_workspace_layout() {
+    local target="$1"
+    local selector="name:$ws_name"
+    local escaped_selector
+    escaped_selector="$(jq -Rn --arg s "$selector" '$s')"
+    hyprctl eval "hl.workspace_rule({ workspace = $escaped_selector, layout = \"$target\" })" >/dev/null
+}
+
+case "$layout:$canvas_active" in
+    dwindle:false)
+        "$script_dir/hypr-canvas-transition" \
+            "$ws_id" true Canvas "$transition_lock" "$cache_path"
+        ;;
+
+    dwindle:true)
+        set_workspace_layout scrolling || exit 1
+        "$script_dir/hypr-canvas-transition" \
+            "$ws_id" false Scrolling "$transition_lock" "$cache_path"
+        ;;
+
+    scrolling:false)
+        set_workspace_layout dwindle || exit 1
+        /usr/bin/notify-send Dwindle
+        ;;
+
+    scrolling:true)
+        "$script_dir/hypr-canvas-transition" \
+            "$ws_id" false Scrolling "$transition_lock" "$cache_path"
+        ;;
+
+    *)
+        set_workspace_layout dwindle || exit 1
+        /usr/bin/notify-send Dwindle
+        ;;
+esac
