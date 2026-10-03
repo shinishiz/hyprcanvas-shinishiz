@@ -289,10 +289,22 @@ and should remain documented unless a separate reconciler stage closes the gap.
 
 ## Maintainer / Gold integration
 
-**shinishiz** maintains `hyprcanvas-shinishiz` and is responsible for the Gold
-integration, Hyprland compatibility work for the Gold setup, daemon/plugin
-integration, packaging and integration work, testing and validation, release
-engineering, and ongoing maintenance of this project.
+**shinishiz** maintains `hyprcanvas-shinishiz`.
+
+Contact:
+
+- GitHub: `shinishiz`
+- Email: `shinishiz@outlook.com`
+- Discord: `shinishi`
+
+Responsibilities:
+
+- Gold integration and ongoing project maintenance;
+- Hyprland compatibility work for the Gold setup;
+- daemon/plugin/Hyprland integration;
+- packaging and integration work;
+- testing and validation;
+- release engineering.
 
 These responsibilities describe the work on this independent suite; they do
 not replace or reassign the original authorship and copyrights of its

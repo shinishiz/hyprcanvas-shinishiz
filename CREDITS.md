@@ -9,10 +9,18 @@ licenses of both historical bases.
 
 ### shinishiz
 
-Maintainer of `hyprcanvas-shinishiz` and responsible for:
+Maintainer: **shinishiz**
 
-- Gold integration and maintenance;
-- compatibility work for the validated Hyprland Gold setup;
+Contact:
+
+- GitHub: `shinishiz`
+- Email: `shinishiz@outlook.com`
+- Discord: `shinishi`
+
+Responsibilities:
+
+- project maintenance and Gold integration;
+- Hyprland compatibility and integration work for the validated Gold setup;
 - daemon, companion plugin, and Hyprland integration;
 - packaging and user integration work;
 - testing and validation;
