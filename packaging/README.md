@@ -2,7 +2,9 @@
 
 Target project: `hyprcanvas-shinishiz`
 
-Planned initial suite tag: `gold-v0.1.0` (not released)
+Initial Gold suite tag target: `gold-v0.1.0`
+
+Public repository: <https://github.com/shinishiz/hyprcanvas-shinishiz>
 
 The current Gold integration is installed from a checkout with:
 
@@ -17,33 +19,34 @@ via `examples/hyprland-canvas.lua`.
 
 `arch/PKGBUILD.legacy` predates the current Gold chain. It still references the older
 `zyrophix/hyprland-canvas` upstream/tag packaging source and must not be
-treated as a reproducible `hyprcanvas-shinishiz` package yet. The public
-repository destination does not exist in this consolidation stage, and the
-planned `gold-v0.1.0` suite tag has not been created.
+treated as the current `hyprcanvas-shinishiz` Gold package recipe. The public
+repository now exists; the `gold-v0.1.0` suite tag is created separately after
+the tag-ready source freeze.
 
-The companion `hypr-canvas` source is now consolidated under `plugin/`, with
-its original history and MIT license preserved. The user installer can build
-and install that integrated source explicitly with `--with-plugin`, while the
-default installer remains plugin-free. Updating the PKGBUILD to build and
-package that component belongs to the later packaging stage; the current
-PKGBUILD remains intentionally pre-Gold.
+The companion `hypr-canvas` source is consolidated under `plugin/`, with its
+original history and MIT license preserved. The user installer can build and
+install that integrated source explicitly with `--with-plugin`, while the
+default installer remains plugin-free. The Gold package template builds this
+integrated source directly.
 
-## Future Gold package model
+## Gold package model
 
-The future Gold package should consume **one immutable source archive** created
-from the `hyprcanvas-shinishiz` release tag. That archive will contain both the
-Python daemon/integration and the companion plugin source, so the package does
-not need a second repository or submodule.
+The Gold package consumes **one immutable source archive** for the
+`hyprcanvas-shinishiz` suite. That archive contains both the Python
+daemon/integration and the companion plugin source, so the package does not
+need a second repository or submodule.
 
-Planned package metadata:
+Validated package metadata:
 
 - candidate `pkgname`: `hyprcanvas-shinishiz`
 - suite `pkgver`: `0.1.0`
 - suite tag: `gold-v0.1.0`
 - Python component version: `1.5.0`
 - companion plugin version: `0.1`
-- source URL: **to be filled after remote/tag publication**
-- source SHA256: **to be filled after remote/tag publication**
+- project URL: <https://github.com/shinishiz/hyprcanvas-shinishiz>
+- source URL: **rendered only after the immutable release source is published**
+- source SHA256: **rendered only after the immutable release source is verified**
+- source directory: **rendered from the verified immutable release archive**
 
 The Gold package build is expected to build the Python package/daemon and the
 plugin from `plugin/`. The packaged/installable payload should include the
@@ -52,13 +55,13 @@ integration example, the ABI-matched plugin `.so`, documentation, root
 `LICENSE`, `plugin/LICENSE`, `CREDITS.md`, and `THIRD_PARTY.md`.
 
 The legacy recipe is preserved byte-for-byte as `arch/PKGBUILD.legacy`.
-`arch/PKGBUILD.in` is the Gold template. It is intentionally non-final and
-contains explicit `@...@` placeholders only for publication-time values such
-as the public project/source URL, source checksum, and archive root. Arch
-`x86_64`, runtime dependencies, and build dependencies have been validated
-against the official Arch repositories. It must not be published as a final
-PKGBUILD until the remaining public-source placeholders have been resolved from
-real evidence; `SKIP` is not part of the Gold template.
+`arch/PKGBUILD.in` is the Gold template. Its project URL is now fixed to the
+public repository. It intentionally retains `@SOURCE_URL@`,
+`@SOURCE_SHA256@`, and `@SOURCE_DIR@` until Stage 8 can render them from
+immutable published asset evidence. Arch `x86_64`, runtime dependencies, and
+build dependencies have been validated against the official Arch repositories.
+It must not be published as a final PKGBUILD until those source placeholders
+have been resolved from real evidence; `SKIP` is not part of the Gold template.
 
 ## User-local versus system package paths
 
@@ -104,15 +107,14 @@ replacement policy is assumed in this stage.
 
 ## Validation status
 
-Stage 5B validates the Gold template and package layout locally from a release
-candidate without a remote. Stage 5C validates the Arch package model using an
-official isolated Arch environment; the initial target is `x86_64` with
-Hyprland 0.56.2. The public source URL and public source checksum remain unset
-until the repository/tag exists, and the package has not been published. The
-release itself remains DRAFT / UNRELEASED and `release/metadata.toml` remains
-`release-preparation`.
+Native Arch validation passed on `x86_64` against Hyprland `0.56.2` using the
+official Arch environment: `makepkg` passed, `namcap` findings were acceptable
+for the pre-publication template, FULL RELRO/BIND_NOW were confirmed, and a
+clean package install/uninstall passed. The public Git repository is live, and
+the targeted history privacy rewrite was completed before publication while
+preserving project trees and third-party provenance.
 
-The historical Git author records that contain the local machine identity are
-not rewritten in Stage 5B. The privacy decision remains pending before public
-repository/tag publication because any history rewrite would change commit
-identities and invalidate frozen source checksums.
+The package itself is not published yet. `release/metadata.toml` is now
+`tag-ready`, while `PKGBUILD.in` remains intentionally templated until Stage 8
+provides verified immutable `SOURCE_URL`, `SOURCE_SHA256`, and `SOURCE_DIR`
+values. No AUR publication is claimed.

@@ -1,11 +1,14 @@
-# gold-v0.1.0 — DRAFT / UNRELEASED
+# gold-v0.1.0
 
-**Status:** DRAFT — UNRELEASED
+**Status:** Source finalized for `gold-v0.1.0`; GitHub Release publication and
+assets are handled separately.
 
-**Planned tag:** `gold-v0.1.0`
+**Tag target:** `gold-v0.1.0`
 
-This is the draft for the first planned `hyprcanvas-shinishiz` suite release.
-It does not represent an existing tag or public release.
+This document is the final release-note source for the first
+`hyprcanvas-shinishiz` Gold suite tag. The public source repository is
+<https://github.com/shinishiz/hyprcanvas-shinishiz>. Tag creation and GitHub
+Release publication are handled separately from this source document.
 
 ## Included components
 
@@ -19,13 +22,20 @@ compatibility target is Hyprland `0.56.2`, commit
 `efb50993780079460b0cbed1363e2166a2de1d9f`; no universal compatibility with
 other Hyprland versions is claimed.
 
-The initial Arch package target validated for this draft is `x86_64`, pinned
+The initial Arch package target is validated for `x86_64`, pinned
 to the Hyprland `0.56.2` ABI. Hyprland 0.56.2 has been observed with
 `PointerManager.hpp` under both `src/managers/` (Fedora Gold) and
 `src/pointer/` (Arch), so the companion plugin resolves those two known
-header layouts at compile time. The package remains unpublished; its public
-project/source URL and immutable public-source checksum are still pending the
-future repository/tag publication stages.
+header layouts at compile time. Native Arch validation passed `makepkg`, clean
+install/uninstall, and ELF hardening checks including FULL RELRO and BIND_NOW.
+The package remains unpublished; the tracked `PKGBUILD.in` stays a template
+until an immutable release source URL, archive root, and checksum are verified.
+
+Public CI validates Python 3.12, 3.13, and 3.14. The tag-ready source passes
+321 tests with 82.43% coverage. The Fedora Gold plugin build is reproducible
+with SHA256
+`ecb0a80ad8fbfbe060413504853742a360c98bf012ed9884f76f0e52371a21c9`
+and ELF Build ID `8a27a06aa02a1c5a24f59c6773bb5bd139cc748e`.
 
 ## Installation model
 

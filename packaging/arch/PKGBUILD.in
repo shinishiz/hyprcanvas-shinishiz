@@ -1,16 +1,16 @@
 # Maintainer: shinishiz <shinishiz@outlook.com>
 # Gold Arch packaging template for hyprcanvas-shinishiz.
 #
-# This is intentionally NOT a final/public PKGBUILD. Before rendering it,
-# Stage 6/7 must supply and verify every @...@ placeholder below against an
-# actual immutable public source archive.
+# This is intentionally NOT a final/public PKGBUILD. The project URL is known;
+# Stage 8 must supply and verify the remaining source placeholders below
+# against an actual immutable public source archive.
 
 pkgname=hyprcanvas-shinishiz
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Hyprland Canvas suite with daemon, integration helpers, and companion plugin"
 arch=('x86_64')
-url='@PROJECT_URL@'
+url='https://github.com/shinishiz/hyprcanvas-shinishiz'
 license=('MIT')
 
 depends=(
