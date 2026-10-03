@@ -14,6 +14,10 @@ log = logging.getLogger("canvas.navigation")
 
 _VALID_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
+_OWNERSHIP_TILED = "tiled_original"
+_OWNERSHIP_SPAWNED = "spawned_during_canvas"
+_RECOVERY_FLOATING_METADATA = "recovery_floating_metadata"
+
 
 def _safe_int(value: object, name: str) -> int:
     """Coerce to int, raising ValueError if impossible.
@@ -123,6 +127,246 @@ class Navigator:
             self._floating_geos[ws_id].pop(addr, None)
         for ws_id in list(self._spawned_during_canvas):
             self._spawned_during_canvas[ws_id].discard(addr)
+
+    def _find_window_ownership(self, addr: str) -> tuple[int, str] | None:
+        """Find active Canvas lifecycle ownership for ``addr``.
+
+        Tiled snapshots and spawned-during-Canvas tracking are lifecycle
+        ownership. ``_floating_geos`` is recovery metadata from earlier Canvas
+        cycles; it may overlap a tiled snapshot, but does not own a window by
+        itself. Any spawned overlap, or lifecycle ownership in more than one
+        active workspace, is treated as corrupt/ambiguous and left untouched.
+        """
+        candidates: list[tuple[int, str]] = []
+        for ws_id, tiled in self._canvas_mode_workspaces.items():
+            in_tiled = addr in tiled
+            in_recovery = addr in self._floating_geos.get(ws_id, {})
+            in_spawned = addr in self._spawned_during_canvas.get(ws_id, set())
+
+            if in_spawned and (in_tiled or in_recovery):
+                raise ValueError(f"ambiguous Canvas ownership for {addr} in workspace {ws_id}")
+
+            if in_tiled:
+                candidates.append((ws_id, _OWNERSHIP_TILED))
+            elif in_spawned:
+                candidates.append((ws_id, _OWNERSHIP_SPAWNED))
+
+        if len(candidates) > 1:
+            raise ValueError(f"ambiguous Canvas ownership for {addr}: {candidates!r}")
+        return candidates[0] if candidates else None
+
+    def _find_recovery_floating_source(self, addr: str) -> tuple[int, str] | None:
+        """Find recovery-only metadata for ``addr`` on an active Canvas workspace.
+
+        Recovery geometry is not lifecycle ownership and never authorizes a
+        runtime move/resize by itself.  A unique active source is useful only to
+        discard stale metadata after the window physically leaves that workspace.
+        """
+        candidates: list[int] = []
+        for ws_id, tiled in self._canvas_mode_workspaces.items():
+            if addr in tiled or addr in self._spawned_during_canvas.get(ws_id, set()):
+                continue
+            if addr in self._floating_geos.get(ws_id, {}):
+                candidates.append(ws_id)
+
+        if len(candidates) > 1:
+            raise ValueError(f"ambiguous Canvas recovery metadata for {addr}: {candidates!r}")
+        if not candidates:
+            return None
+        return candidates[0], _RECOVERY_FLOATING_METADATA
+
+    @staticmethod
+    def _client_geometry(client: dict[str, Any]) -> dict[str, list[int]]:
+        """Return validated at/size geometry from a j/clients entry."""
+        try:
+            at = client.get("at", [0, 0])
+            size = client.get("size", [0, 0])
+            return {
+                "at": [int(at[0]), int(at[1])],
+                "size": [int(size[0]), int(size[1])],
+            }
+        except (IndexError, TypeError, ValueError):
+            return {}
+
+    def handle_window_moved(
+        self,
+        addr: str,
+        destination_workspace_id: int,
+        destination_workspace_name: str,
+        client: dict[str, Any],
+    ) -> str:
+        """Reconcile Canvas ownership after Hyprland has moved a window.
+
+        The socket event is post-move, so ``client`` must already describe the
+        destination workspace.  EventListener performs that stale-event check
+        before calling this method.
+        """
+        try:
+            ownership = self._find_window_ownership(addr)
+        except ValueError as exc:
+            log.warning("movewindowv2: %s", exc)
+            return "IGNORED:AMBIGUOUS_OWNERSHIP"
+
+        destination_canvas = self.is_canvas_active(destination_workspace_id)
+
+        if ownership is None:
+            try:
+                recovery = self._find_recovery_floating_source(addr)
+            except ValueError as exc:
+                log.warning("movewindowv2: %s", exc)
+                return "IGNORED:AMBIGUOUS_RECOVERY_METADATA"
+
+            if recovery is not None:
+                source_workspace_id, recovery_kind = recovery
+                if source_workspace_id == destination_workspace_id:
+                    return "IGNORED:ALREADY_RECONCILED"
+
+                next_floating = {ws: dict(geos) for ws, geos in self._floating_geos.items()}
+                next_floating.get(source_workspace_id, {}).pop(addr, None)
+                try:
+                    self._persist_canvas_state(self._canvas_mode_workspaces, next_floating)
+                except toggle_state.ToggleStateError as exc:
+                    log.warning("movewindowv2: recovery metadata save failed: %s", exc)
+                    return "ERROR:STATE_SAVE_FAILED"
+
+                # Recovery-only geometry belongs to an earlier Canvas cycle.  A
+                # currently-floating client is already in the correct native
+                # state, regardless of whether the destination Canvas is ON.
+                if bool(client.get("floating")) or not destination_canvas:
+                    self._floating_geos = next_floating
+                    if debug.enabled():
+                        debug.dbg2(
+                            "WINDOW_MOVE_RECOVERY_CLEANUP",
+                            addr=addr,
+                            source=source_workspace_id,
+                            destination=destination_workspace_id,
+                            destination_name=destination_workspace_name,
+                            tracking=recovery_kind,
+                            destination_canvas=destination_canvas,
+                        )
+                    return "RECONCILED:RECOVERY_METADATA_CLEANED"
+
+                # Defensive path: if the post-move client is tiled and entered
+                # an active Canvas, treat it exactly like any other normal tiled
+                # incoming window.  The old recovery geometry remains non-authoritative.
+                geo = self._client_geometry(client)
+                target = {addr: geo}
+                if not self._set_snapshot_floating(
+                    destination_workspace_id, target, floating=True
+                ):
+                    try:
+                        self._persist_canvas_state(
+                            self._canvas_mode_workspaces, self._floating_geos
+                        )
+                    except toggle_state.ToggleStateError as exc:
+                        log.error("movewindowv2: recovery state rollback failed: %s", exc)
+                        return "ERROR:STATE_ROLLBACK_FAILED"
+                    return "ERROR:FLOAT_FAILED"
+                if geo and not self._restore_tiled_geometry_as_floating(
+                    destination_workspace_id, target
+                ):
+                    self._set_snapshot_floating(
+                        destination_workspace_id, target, floating=False
+                    )
+                    try:
+                        self._persist_canvas_state(
+                            self._canvas_mode_workspaces, self._floating_geos
+                        )
+                    except toggle_state.ToggleStateError as exc:
+                        log.error("movewindowv2: recovery state rollback failed: %s", exc)
+                        return "ERROR:STATE_ROLLBACK_FAILED"
+                    return "ERROR:GEOMETRY_RESTORE_FAILED"
+
+                self._floating_geos = next_floating
+                self.register_spawned_during_canvas(destination_workspace_id, addr)
+                return "ABSORBED:SPAWNED_DURING_CANVAS"
+
+        # A normal tiled window entering an already-active Canvas needs the same
+        # lifecycle as a window opened during Canvas: float it now and tile it on
+        # Canvas OFF.  Normal floating windows remain native floating windows.
+        if ownership is None:
+            if not destination_canvas or bool(client.get("floating")):
+                return "IGNORED:NO_CANVAS_OWNERSHIP"
+
+            geo = self._client_geometry(client)
+            target = {addr: geo}
+            if not self._set_snapshot_floating(destination_workspace_id, target, floating=True):
+                return "ERROR:FLOAT_FAILED"
+            if geo and not self._restore_tiled_geometry_as_floating(
+                destination_workspace_id, target
+            ):
+                self._set_snapshot_floating(destination_workspace_id, target, floating=False)
+                return "ERROR:GEOMETRY_RESTORE_FAILED"
+            self.register_spawned_during_canvas(destination_workspace_id, addr)
+            return "ABSORBED:SPAWNED_DURING_CANVAS"
+
+        source_workspace_id, ownership_kind = ownership
+        if source_workspace_id == destination_workspace_id:
+            return "IGNORED:ALREADY_RECONCILED"
+
+        next_modes = {ws: dict(snapshot) for ws, snapshot in self._canvas_mode_workspaces.items()}
+        next_floating = {ws: dict(geos) for ws, geos in self._floating_geos.items()}
+        next_spawned = {ws: set(addrs) for ws, addrs in self._spawned_during_canvas.items()}
+
+        source_tiled_geo = next_modes.get(source_workspace_id, {}).get(addr, {})
+        # Remove every source-side trace only in the prospective state.  The
+        # live state is not changed until persistence/runtime work succeeds.
+        next_modes.get(source_workspace_id, {}).pop(addr, None)
+        next_floating.get(source_workspace_id, {}).pop(addr, None)
+        next_spawned.get(source_workspace_id, set()).discard(addr)
+
+        if destination_canvas:
+            if ownership_kind == _OWNERSHIP_TILED:
+                next_modes[destination_workspace_id][addr] = dict(source_tiled_geo)
+            elif ownership_kind == _OWNERSHIP_SPAWNED:
+                next_spawned.setdefault(destination_workspace_id, set()).add(addr)
+
+        persistent_changed = (
+            next_modes != self._canvas_mode_workspaces or next_floating != self._floating_geos
+        )
+        if persistent_changed:
+            try:
+                self._persist_canvas_state(next_modes, next_floating)
+            except toggle_state.ToggleStateError as exc:
+                log.warning("movewindowv2: state save failed: %s", exc)
+                return "ERROR:STATE_SAVE_FAILED"
+
+        runtime_ok = True
+        if destination_canvas:
+            if not bool(client.get("floating")):
+                runtime_ok = self._set_snapshot_floating(
+                    destination_workspace_id, {addr: {}}, floating=True
+                )
+        elif ownership_kind in {_OWNERSHIP_TILED, _OWNERSHIP_SPAWNED}:
+            runtime_ok = self._set_snapshot_floating(
+                destination_workspace_id, {addr: {}}, floating=False
+            )
+
+        if not runtime_ok:
+            if persistent_changed:
+                try:
+                    self._persist_canvas_state(
+                        self._canvas_mode_workspaces, self._floating_geos
+                    )
+                except toggle_state.ToggleStateError as exc:
+                    log.error("movewindowv2: state rollback failed: %s", exc)
+                    return "ERROR:STATE_ROLLBACK_FAILED"
+            return "ERROR:RUNTIME_RECONCILE_FAILED"
+
+        self._canvas_mode_workspaces = next_modes
+        self._floating_geos = next_floating
+        self._spawned_during_canvas = next_spawned
+        if debug.enabled():
+            debug.dbg2(
+                "WINDOW_MOVE_RECONCILE",
+                addr=addr,
+                source=source_workspace_id,
+                destination=destination_workspace_id,
+                destination_name=destination_workspace_name,
+                ownership=ownership_kind,
+                destination_canvas=destination_canvas,
+            )
+        return "RECONCILED"
 
     def get_spawn_geometry(self, workspace_id: int) -> tuple[int, int] | None:
         """Calculate spawn geometry for a new window during Canvas ON.

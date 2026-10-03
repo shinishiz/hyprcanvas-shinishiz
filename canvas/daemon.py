@@ -117,6 +117,74 @@ class EventListener:
             self._handle_openwindow(payload)
         elif event == "closewindow":
             self._handle_closewindow(payload)
+        elif event == "movewindowv2":
+            self._handle_movewindowv2(payload)
+
+    def _handle_movewindowv2(self, payload: str) -> None:
+        """Handle movewindowv2: ADDRESS,DEST_WORKSPACE_ID,DEST_WORKSPACE_NAME."""
+        parts = payload.split(",", 2)
+        if len(parts) != 3:
+            return
+
+        addr = _normalize_address(parts[0])
+        if not _VALID_ADDR.match(addr):
+            return
+        try:
+            destination_workspace_id = int(parts[1])
+        except (TypeError, ValueError):
+            return
+        if destination_workspace_id <= 0:
+            return
+        destination_workspace_name = parts[2].strip()
+        if not destination_workspace_name:
+            return
+
+        # movewindowv2 is emitted after CWindow::moveToWorkspace().  Verify the
+        # current client before reconciling so delayed 2->6->3 events cannot
+        # mutate ownership using a stale destination.
+        try:
+            clients = json.loads(self._ipc.send("j/clients"))
+        except Exception as exc:
+            log.debug("movewindowv2: j/clients failed: %s", exc)
+            return
+        if not isinstance(clients, list):
+            return
+        client = next(
+            (
+                c
+                for c in clients
+                if isinstance(c, dict)
+                and _normalize_address(str(c.get("address", ""))) == addr
+            ),
+            None,
+        )
+        if client is None:
+            return
+        workspace = client.get("workspace")
+        if not isinstance(workspace, dict):
+            return
+        raw_workspace_id = workspace.get("id")
+        if isinstance(raw_workspace_id, bool) or not isinstance(raw_workspace_id, (int, str)):
+            return
+        try:
+            current_workspace_id = int(raw_workspace_id)
+        except (TypeError, ValueError):
+            return
+        if current_workspace_id != destination_workspace_id:
+            log.debug(
+                "movewindowv2: stale event for %s: event=%s current=%s",
+                addr,
+                destination_workspace_id,
+                current_workspace_id,
+            )
+            return
+
+        self._navigator.handle_window_moved(
+            addr,
+            destination_workspace_id,
+            destination_workspace_name,
+            client,
+        )
 
     def _handle_openwindow(self, payload: str) -> None:
         """Handle openwindow event: ADDRESS,WORKSPACENAME,CLASS,TITLE"""

@@ -710,6 +710,381 @@ def test_safe_int_valid():
     assert _safe_int("100", "x") == 100
 
 
+def _make_clean_move_nav() -> tuple[Navigator, MagicMock]:
+    ipc = MagicMock()
+    with patch("canvas.navigation.toggle_state.load", return_value={}):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+    return nav, ipc
+
+
+def _moved_client(*, workspace: int, floating: bool = True) -> dict:
+    return {
+        "address": "0xabc",
+        "workspace": {"id": workspace},
+        "floating": floating,
+        "at": [100, 200],
+        "size": [400, 300],
+    }
+
+
+def test_window_move_tiled_original_to_canvas_off_retiles_and_cleans_source():
+    nav, _ipc = _make_clean_move_nav()
+    tiled_geo = {"at": [10, 20], "size": [500, 400]}
+    nav._canvas_mode_workspaces = {2: {"0xabc": tiled_geo}}
+    nav._floating_geos = {2: {"0xabc": {"at": [30, 40], "size": [500, 400]}}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating", return_value=True) as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "RECONCILED"
+    set_floating.assert_called_once_with(6, {"0xabc": {}}, floating=False)
+    assert "0xabc" not in nav._canvas_mode_workspaces[2]
+    assert "0xabc" not in nav._floating_geos.get(2, {})
+    assert 6 not in nav._canvas_mode_workspaces
+    persisted = save.call_args.args[0]
+    assert persisted[2]["active"] is True
+    assert "0xabc" not in persisted[2]["tiled"]
+
+
+def test_window_move_spawned_to_canvas_off_retiles_and_cleans_source():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {}}
+    nav._spawned_during_canvas = {2: {"0xabc"}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating", return_value=True) as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "RECONCILED"
+    set_floating.assert_called_once_with(6, {"0xabc": {}}, floating=False)
+    assert "0xabc" not in nav._spawned_during_canvas[2]
+    assert 6 not in nav._spawned_during_canvas
+    save.assert_not_called()
+
+
+def test_window_move_recovery_floating_to_canvas_off_preserves_current_geometry():
+    nav, ipc = _make_clean_move_nav()
+    old_geo = {"at": [100, 100], "size": [800, 600]}
+    nav._canvas_mode_workspaces = {2: {}}
+    nav._floating_geos = {2: {"0xabc": old_geo}}
+    current = _moved_client(workspace=6)
+    current["at"] = [1400, 300]
+    current["size"] = [1000, 700]
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_apply_floating_geos") as apply_geo,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+        patch.object(nav, "_restore_tiled_geometry_as_floating") as restore,
+        patch.object(nav, "_tile_windows") as tile,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", current)
+
+    assert result == "RECONCILED:RECOVERY_METADATA_CLEANED"
+    apply_geo.assert_not_called()
+    set_floating.assert_not_called()
+    restore.assert_not_called()
+    tile.assert_not_called()
+    ipc.eval_lua.assert_not_called()
+    assert "0xabc" not in nav._floating_geos.get(2, {})
+    assert 6 not in nav._floating_geos
+    assert 6 not in nav._canvas_mode_workspaces
+    assert nav._spawned_during_canvas == {}
+    save.assert_called_once()
+
+
+def test_window_move_tiled_original_canvas_to_canvas_transfers_kind():
+    nav, _ipc = _make_clean_move_nav()
+    geo = {"at": [10, 20], "size": [500, 400]}
+    nav._canvas_mode_workspaces = {2: {"0xabc": geo}, 6: {}}
+    nav._floating_geos = {2: {"0xabc": {"at": [30, 40], "size": [700, 500]}}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "RECONCILED"
+    assert "0xabc" not in nav._canvas_mode_workspaces[2]
+    assert nav._canvas_mode_workspaces[6]["0xabc"] == geo
+    assert "0xabc" not in nav._floating_geos.get(2, {})
+    assert "0xabc" not in nav._floating_geos.get(6, {})
+    set_floating.assert_not_called()
+    save.assert_called_once()
+
+
+def test_window_move_spawned_canvas_to_canvas_transfers_kind():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {}, 6: {}}
+    nav._spawned_during_canvas = {2: {"0xabc"}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "RECONCILED"
+    assert "0xabc" not in nav._spawned_during_canvas[2]
+    assert "0xabc" in nav._spawned_during_canvas[6]
+    set_floating.assert_not_called()
+    save.assert_not_called()
+
+
+def test_window_move_recovery_floating_canvas_to_canvas_cleans_without_transfer():
+    nav, ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {}, 6: {}}
+    nav._floating_geos = {2: {"0xabc": {"at": [1, 2], "size": [300, 200]}}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_apply_floating_geos") as apply_geo,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "RECONCILED:RECOVERY_METADATA_CLEANED"
+    assert "0xabc" not in nav._floating_geos.get(2, {})
+    assert "0xabc" not in nav._floating_geos.get(6, {})
+    assert "0xabc" not in nav._canvas_mode_workspaces[6]
+    assert nav._spawned_during_canvas == {}
+    apply_geo.assert_not_called()
+    set_floating.assert_not_called()
+    ipc.eval_lua.assert_not_called()
+    save.assert_called_once()
+
+
+def test_window_move_normal_to_canvas_off_is_ignored():
+    nav, _ipc = _make_clean_move_nav()
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "IGNORED:NO_CANVAS_OWNERSHIP"
+    save.assert_not_called()
+    set_floating.assert_not_called()
+
+
+def test_window_move_fresh_native_floating_from_canvas_to_off_is_ignored():
+    nav, ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_apply_floating_geos") as apply_geo,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "IGNORED:NO_CANVAS_OWNERSHIP"
+    save.assert_not_called()
+    apply_geo.assert_not_called()
+    set_floating.assert_not_called()
+    ipc.eval_lua.assert_not_called()
+    assert nav._floating_geos == {}
+    assert nav._spawned_during_canvas == {}
+
+
+def test_window_move_recovery_floating_to_off_save_failure_keeps_metadata():
+    nav, ipc = _make_clean_move_nav()
+    old_geo = {"at": [100, 100], "size": [800, 600]}
+    nav._canvas_mode_workspaces = {2: {}}
+    nav._floating_geos = {2: {"0xabc": old_geo}}
+
+    with (
+        patch(
+            "canvas.navigation.toggle_state.save",
+            side_effect=ToggleStateError("forced save failure"),
+        ),
+        patch.object(nav, "_apply_floating_geos") as apply_geo,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "ERROR:STATE_SAVE_FAILED"
+    assert nav._floating_geos[2]["0xabc"] == old_geo
+    assert 6 not in nav._floating_geos
+    apply_geo.assert_not_called()
+    set_floating.assert_not_called()
+    ipc.eval_lua.assert_not_called()
+
+
+def test_window_move_inactive_recovery_metadata_is_not_used_as_source():
+    nav, ipc = _make_clean_move_nav()
+    nav._floating_geos = {2: {"0xabc": {"at": [1, 2], "size": [300, 200]}}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_apply_floating_geos") as apply_geo,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "IGNORED:NO_CANVAS_OWNERSHIP"
+    assert "0xabc" in nav._floating_geos[2]
+    save.assert_not_called()
+    apply_geo.assert_not_called()
+    set_floating.assert_not_called()
+    ipc.eval_lua.assert_not_called()
+
+
+def test_window_move_recovery_floating_tiled_client_into_canvas_absorbs_as_spawned():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {}, 6: {}}
+    nav._floating_geos = {2: {"0xabc": {"at": [1, 2], "size": [300, 200]}}}
+    client = _moved_client(workspace=6, floating=False)
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating", return_value=True) as set_floating,
+        patch.object(nav, "_restore_tiled_geometry_as_floating", return_value=True) as restore,
+        patch.object(nav, "_apply_floating_geos") as apply_geo,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", client)
+
+    assert result == "ABSORBED:SPAWNED_DURING_CANVAS"
+    set_floating.assert_called_once_with(
+        6,
+        {"0xabc": {"at": [100, 200], "size": [400, 300]}},
+        floating=True,
+    )
+    restore.assert_called_once()
+    apply_geo.assert_not_called()
+    assert "0xabc" not in nav._floating_geos.get(2, {})
+    assert "0xabc" not in nav._floating_geos.get(6, {})
+    assert "0xabc" in nav._spawned_during_canvas[6]
+    save.assert_called_once()
+
+
+def test_window_move_normal_tiled_into_canvas_is_absorbed_as_spawned():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {6: {}}
+    client = _moved_client(workspace=6, floating=False)
+
+    with (
+        patch.object(nav, "_set_snapshot_floating", return_value=True) as set_floating,
+        patch.object(nav, "_restore_tiled_geometry_as_floating", return_value=True) as restore,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", client)
+
+    assert result == "ABSORBED:SPAWNED_DURING_CANVAS"
+    set_floating.assert_called_once_with(
+        6,
+        {"0xabc": {"at": [100, 200], "size": [400, 300]}},
+        floating=True,
+    )
+    restore.assert_called_once()
+    assert "0xabc" in nav._spawned_during_canvas[6]
+
+
+def test_window_move_normal_floating_into_canvas_remains_native_floating():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {6: {}}
+
+    with patch.object(nav, "_set_snapshot_floating") as set_floating:
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "IGNORED:NO_CANVAS_OWNERSHIP"
+    set_floating.assert_not_called()
+    assert nav._spawned_during_canvas == {}
+
+
+def test_window_move_ambiguous_ownership_is_conservative():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {"0xabc": {}}, 3: {"0xabc": {}}}
+    before = {ws: dict(snap) for ws, snap in nav._canvas_mode_workspaces.items()}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "IGNORED:AMBIGUOUS_OWNERSHIP"
+    assert nav._canvas_mode_workspaces == before
+    save.assert_not_called()
+    set_floating.assert_not_called()
+
+
+def test_window_move_duplicate_recovery_metadata_is_conservative():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {}, 3: {}}
+    nav._floating_geos = {
+        2: {"0xabc": {"at": [1, 2], "size": [300, 200]}},
+        3: {"0xabc": {"at": [9, 8], "size": [700, 600]}},
+    }
+    before = {ws: dict(geos) for ws, geos in nav._floating_geos.items()}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_apply_floating_geos") as apply_geo,
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "IGNORED:AMBIGUOUS_RECOVERY_METADATA"
+    assert nav._floating_geos == before
+    save.assert_not_called()
+    apply_geo.assert_not_called()
+    set_floating.assert_not_called()
+
+
+def test_window_move_tiled_to_off_state_save_failure_keeps_recovery_metadata():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {"0xabc": {}}}
+
+    with (
+        patch(
+            "canvas.navigation.toggle_state.save",
+            side_effect=ToggleStateError("forced save failure"),
+        ),
+        patch.object(nav, "_set_snapshot_floating") as set_floating,
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "ERROR:STATE_SAVE_FAILED"
+    assert "0xabc" in nav._canvas_mode_workspaces[2]
+    set_floating.assert_not_called()
+
+
+def test_window_move_tiled_to_off_runtime_failure_rolls_back_persistence():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {"0xabc": {}}}
+
+    with (
+        patch("canvas.navigation.toggle_state.save") as save,
+        patch.object(nav, "_set_snapshot_floating", return_value=False),
+    ):
+        result = nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+
+    assert result == "ERROR:RUNTIME_RECONCILE_FAILED"
+    assert "0xabc" in nav._canvas_mode_workspaces[2]
+    assert save.call_count == 2
+
+
+def test_window_move_transfer_then_closewindow_cleans_destination_ownership():
+    nav, _ipc = _make_clean_move_nav()
+    nav._canvas_mode_workspaces = {2: {"0xabc": {}}, 6: {}}
+    with patch("canvas.navigation.toggle_state.save"):
+        assert (
+            nav.handle_window_moved("0xabc", 6, "6", _moved_client(workspace=6))
+            == "RECONCILED"
+        )
+
+    nav.unregister_window("0xabc")
+
+    assert "0xabc" not in nav._canvas_mode_workspaces[6]
+
+
 def test_safe_int_invalid():
     import pytest
 

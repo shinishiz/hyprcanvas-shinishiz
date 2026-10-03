@@ -1077,3 +1077,66 @@ def test_event_listener_closewindow_cancels_pending_retry():
 
     # Retry should be cancelled (no eval_lua should be called later)
     navigator.unregister_window.assert_called_once_with("0xabc123")
+
+
+def test_event_listener_movewindowv2_parses_and_normalizes():
+    ipc = MagicMock()
+    navigator = MagicMock()
+    client = {
+        "address": "0xabcdef",
+        "workspace": {"id": 6},
+        "floating": True,
+        "at": [10, 20],
+        "size": [300, 200],
+    }
+    ipc.send.return_value = json.dumps([client])
+    listener = _make_event_listener(navigator=navigator, ipc=ipc)
+
+    listener._handle_line("movewindowv2>>ABCDEF,6,6")
+
+    navigator.handle_window_moved.assert_called_once_with("0xabcdef", 6, "6", client)
+
+
+def test_event_listener_movewindowv2_malformed_payload_ignored():
+    ipc = MagicMock()
+    navigator = MagicMock()
+    listener = _make_event_listener(navigator=navigator, ipc=ipc)
+
+    for line in (
+        "movewindowv2>>",
+        "movewindowv2>>abcdef,6",
+        "movewindowv2>>not-hex,6,6",
+        "movewindowv2>>abcdef,nope,6",
+        "movewindowv2>>abcdef,0,0",
+        "movewindowv2>>abcdef,-1,special",
+        "movewindowv2>>abcdef,6,",
+    ):
+        listener._handle_line(line)
+
+    ipc.send.assert_not_called()
+    navigator.handle_window_moved.assert_not_called()
+
+
+def test_event_listener_legacy_movewindow_is_not_processed():
+    ipc = MagicMock()
+    navigator = MagicMock()
+    listener = _make_event_listener(navigator=navigator, ipc=ipc)
+
+    listener._handle_line("movewindow>>abcdef,6")
+
+    ipc.send.assert_not_called()
+    navigator.handle_window_moved.assert_not_called()
+
+
+def test_event_listener_movewindowv2_stale_destination_ignored():
+    ipc = MagicMock()
+    navigator = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [{"address": "0xabcdef", "workspace": {"id": 3}, "floating": True}]
+    )
+    listener = _make_event_listener(navigator=navigator, ipc=ipc)
+
+    listener._handle_line("movewindowv2>>abcdef,6,6")
+
+    ipc.send.assert_called_once_with("j/clients")
+    navigator.handle_window_moved.assert_not_called()
