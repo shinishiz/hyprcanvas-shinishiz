@@ -2,7 +2,7 @@
 name = "hyprcanvas-shinishiz"
 suite_version = "0.1.0"
 planned_tag = "gold-v0.1.0"
-status = "tag-ready"
+status = "released"
 
 [maintainer]
 name = "shinishiz"

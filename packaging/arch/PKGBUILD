@@ -1,9 +1,9 @@
 # Maintainer: shinishiz <shinishiz@outlook.com>
 # Gold Arch packaging template for hyprcanvas-shinishiz.
 #
-# This template intentionally retains release-specific source placeholders.
-# Render them from immutable published release evidence. For gold-v0.1.0, see
-# the tracked PKGBUILD.
+# This is intentionally NOT a final/public PKGBUILD. The project URL is known;
+# Stage 8 must supply and verify the remaining source placeholders below
+# against an actual immutable public source archive.
 
 pkgname=hyprcanvas-shinishiz
 pkgver=0.1.0
@@ -30,10 +30,10 @@ makedepends=(
   'libdrm'
 )
 
-source=("$pkgname-$pkgver.tar.gz::@SOURCE_URL@")
-sha256sums=('@SOURCE_SHA256@')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/shinishiz/hyprcanvas-shinishiz/releases/download/gold-v0.1.0/hyprcanvas-shinishiz-gold-v0.1.0.tar.gz")
+sha256sums=('a257e94fa56b69610e9e02a72014a81e00ed9b9b906189355d39a6eb510c2d3a')
 
-_source_dir='@SOURCE_DIR@'
+_source_dir='hyprcanvas-shinishiz-gold-v0.1.0'
 
 build() {
   cd "$srcdir/$_source_dir"

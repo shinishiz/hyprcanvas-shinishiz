@@ -12,9 +12,9 @@ daemon, Gold integration, packaging, and adapted companion plugin now live in
 one source tree. See [CREDITS.md](CREDITS.md) and
 [THIRD_PARTY.md](THIRD_PARTY.md) for provenance details.
 
-**Current status:** Gold source finalized for `gold-v0.1.0`
+**Current status:** `gold-v0.1.0` published.
 
-**Initial Gold suite tag target:** `gold-v0.1.0`
+**Gold Release:** <https://github.com/shinishiz/hyprcanvas-shinishiz/releases/tag/gold-v0.1.0>
 
 **Integrated component versions:** Python daemon `1.5.0`; companion plugin
 `0.1`
@@ -24,7 +24,7 @@ one source tree. See [CREDITS.md](CREDITS.md) and
 `hyprcanvas-shinishiz` uses a suite version distinct from the versions of its
 integrated components:
 
-- Suite: `0.1.0`; initial Gold suite tag target `gold-v0.1.0`.
+- Suite: `0.1.0`; released as `gold-v0.1.0`.
 - Daemon component: `hyprland-canvas` `1.5.0`.
 - Companion plugin component: `hypr-canvas` `0.1`.
 
@@ -106,6 +106,10 @@ Runtime integration also uses `jq`, `flock` (util-linux), and
 `notify-send` (libnotify).
 
 Public repository: <https://github.com/shinishiz/hyprcanvas-shinishiz>
+
+Gold source asset: `hyprcanvas-shinishiz-gold-v0.1.0.tar.gz`
+
+SHA256: `a257e94fa56b69610e9e02a72014a81e00ed9b9b906189355d39a6eb510c2d3a`
 
 Clone the current source and install the Python component with **uv**
 (recommended):

@@ -2,7 +2,15 @@
 
 Target project: `hyprcanvas-shinishiz`
 
-Initial Gold suite tag target: `gold-v0.1.0`
+Gold Release: `gold-v0.1.0`
+
+Release URL: <https://github.com/shinishiz/hyprcanvas-shinishiz/releases/tag/gold-v0.1.0>
+
+Canonical source URL:
+<https://github.com/shinishiz/hyprcanvas-shinishiz/releases/download/gold-v0.1.0/hyprcanvas-shinishiz-gold-v0.1.0.tar.gz>
+
+SHA256:
+`a257e94fa56b69610e9e02a72014a81e00ed9b9b906189355d39a6eb510c2d3a`
 
 Public repository: <https://github.com/shinishiz/hyprcanvas-shinishiz>
 
@@ -19,9 +27,9 @@ via `examples/hyprland-canvas.lua`.
 
 `arch/PKGBUILD.legacy` predates the current Gold chain. It still references the older
 `zyrophix/hyprland-canvas` upstream/tag packaging source and must not be
-treated as the current `hyprcanvas-shinishiz` Gold package recipe. The public
-repository now exists; the `gold-v0.1.0` suite tag is created separately after
-the tag-ready source freeze.
+treated as the current `hyprcanvas-shinishiz` Gold package recipe. The public repository and immutable `gold-v0.1.0` suite tag are published.
+The tag remains the Gold source snapshot while post-release `main` carries
+administrative/documentation synchronization.
 
 The companion `hypr-canvas` source is consolidated under `plugin/`, with its
 original history and MIT license preserved. The user installer can build and
@@ -44,9 +52,9 @@ Validated package metadata:
 - Python component version: `1.5.0`
 - companion plugin version: `0.1`
 - project URL: <https://github.com/shinishiz/hyprcanvas-shinishiz>
-- source URL: **rendered only after the immutable release source is published**
-- source SHA256: **rendered only after the immutable release source is verified**
-- source directory: **rendered from the verified immutable release archive**
+- source URL: <https://github.com/shinishiz/hyprcanvas-shinishiz/releases/download/gold-v0.1.0/hyprcanvas-shinishiz-gold-v0.1.0.tar.gz>
+- source SHA256: `a257e94fa56b69610e9e02a72014a81e00ed9b9b906189355d39a6eb510c2d3a`
+- source directory: `hyprcanvas-shinishiz-gold-v0.1.0`
 
 The Gold package build is expected to build the Python package/daemon and the
 plugin from `plugin/`. The packaged/installable payload should include the
@@ -55,13 +63,13 @@ integration example, the ABI-matched plugin `.so`, documentation, root
 `LICENSE`, `plugin/LICENSE`, `CREDITS.md`, and `THIRD_PARTY.md`.
 
 The legacy recipe is preserved byte-for-byte as `arch/PKGBUILD.legacy`.
-`arch/PKGBUILD.in` is the Gold template. Its project URL is now fixed to the
-public repository. It intentionally retains `@SOURCE_URL@`,
-`@SOURCE_SHA256@`, and `@SOURCE_DIR@` until Stage 8 can render them from
-immutable published asset evidence. Arch `x86_64`, runtime dependencies, and
-build dependencies have been validated against the official Arch repositories.
-It must not be published as a final PKGBUILD until those source placeholders
-have been resolved from real evidence; `SKIP` is not part of the Gold template.
+`arch/PKGBUILD.in` is the reusable Gold template and intentionally retains
+`@SOURCE_URL@`, `@SOURCE_SHA256@`, and `@SOURCE_DIR@` for future immutable
+release evidence. The exact rendered recipe published for `gold-v0.1.0` is
+also tracked as `arch/PKGBUILD`; it is byte-identical to the validated GitHub
+Release asset. Arch `x86_64`, runtime dependencies, and build dependencies
+have been validated against the official Arch repositories. `SKIP` is not
+part of the Gold recipe.
 
 ## User-local versus system package paths
 
@@ -114,7 +122,6 @@ clean package install/uninstall passed. The public Git repository is live, and
 the targeted history privacy rewrite was completed before publication while
 preserving project trees and third-party provenance.
 
-The package itself is not published yet. `release/metadata.toml` is now
-`tag-ready`, while `PKGBUILD.in` remains intentionally templated until Stage 8
-provides verified immutable `SOURCE_URL`, `SOURCE_SHA256`, and `SOURCE_DIR`
-values. No AUR publication is claimed.
+The rendered Gold `PKGBUILD` is published as a GitHub Release asset and is
+tracked on `main`. No AUR publication is claimed, no binary `.pkg.tar.zst` is
+part of the Gold Release, and no generic plugin `.so` is part of the Release.

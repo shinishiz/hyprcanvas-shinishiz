@@ -1,14 +1,22 @@
 # gold-v0.1.0
 
-**Status:** Source finalized for `gold-v0.1.0`; GitHub Release publication and
-assets are handled separately.
+**Status:** PUBLISHED
 
-**Tag target:** `gold-v0.1.0`
+**Tag:** `gold-v0.1.0`
 
-This document is the final release-note source for the first
-`hyprcanvas-shinishiz` Gold suite tag. The public source repository is
-<https://github.com/shinishiz/hyprcanvas-shinishiz>. Tag creation and GitHub
-Release publication are handled separately from this source document.
+**Release URL:** <https://github.com/shinishiz/hyprcanvas-shinishiz/releases/tag/gold-v0.1.0>
+
+**Published:** `2026-10-03T14:37:32Z`
+
+**Canonical source asset:**
+<https://github.com/shinishiz/hyprcanvas-shinishiz/releases/download/gold-v0.1.0/hyprcanvas-shinishiz-gold-v0.1.0.tar.gz>
+
+**Source SHA256:**
+`a257e94fa56b69610e9e02a72014a81e00ed9b9b906189355d39a6eb510c2d3a`
+
+This is the post-publication main-branch record for the first
+`hyprcanvas-shinishiz` Gold suite release. The immutable tagged copy remains
+the historical source snapshot.
 
 ## Included components
 
@@ -28,11 +36,13 @@ to the Hyprland `0.56.2` ABI. Hyprland 0.56.2 has been observed with
 `src/pointer/` (Arch), so the companion plugin resolves those two known
 header layouts at compile time. Native Arch validation passed `makepkg`, clean
 install/uninstall, and ELF hardening checks including FULL RELRO and BIND_NOW.
-The package remains unpublished; the tracked `PKGBUILD.in` stays a template
-until an immutable release source URL, archive root, and checksum are verified.
+A rendered `PKGBUILD` is published as a GitHub Release asset and is tracked on
+post-release `main` for convenience. `PKGBUILD.in` remains the reusable
+template. No AUR publication is claimed, no binary `.pkg.tar.zst` is part of
+the Gold Release, and no generic prebuilt plugin `.so` is published.
 
-Public CI validates Python 3.12, 3.13, and 3.14. The tag-ready source passes
-321 tests with 82.43% coverage. The Fedora Gold plugin build is reproducible
+Public CI validates Python 3.12, 3.13, and 3.14. The immutable Gold source
+passes 321 tests with 82.43% coverage. The Fedora Gold plugin build is reproducible
 with SHA256
 `ecb0a80ad8fbfbe060413504853742a360c98bf012ed9884f76f0e52371a21c9`
 and ELF Build ID `8a27a06aa02a1c5a24f59c6773bb5bd139cc748e`.
