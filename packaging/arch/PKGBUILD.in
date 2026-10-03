@@ -1,36 +1,33 @@
+# Maintainer: shinishiz <shinishiz@outlook.com>
 # Gold Arch packaging template for hyprcanvas-shinishiz.
 #
 # This is intentionally NOT a final/public PKGBUILD. Before rendering it,
 # Stage 6/7 must supply and verify every @...@ placeholder below against an
-# actual immutable public source archive and an Arch build environment.
+# actual immutable public source archive.
 
 pkgname=hyprcanvas-shinishiz
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Hyprland Canvas suite with daemon, integration helpers, and companion plugin"
-arch=('@ARCH@')
+arch=('x86_64')
 url='@PROJECT_URL@'
 license=('MIT')
 
-# The first three runtime dependency names are inherited from the historical
-# Arch recipe. The additional Gold runtime dependencies used by the wrappers
-# (jq/flock/notify-send) still require exact Arch package-name validation.
 depends=(
-  'hyprland>=0.55'
+  'hyprland=0.56.2'
   'python>=3.12'
   'python-yaml'
-  @GOLD_RUNTIME_DEPENDS@
+  'jq'
+  'util-linux'
+  'libnotify'
 )
 
-# Python build dependency names below are inherited from the historical recipe.
-# Exact Arch package names needed for the native companion plugin toolchain and
-# its hyprland/pixman/libdrm development metadata remain NEEDS ARCH VALIDATION.
 makedepends=(
   'python-build'
   'python-hatchling'
   'python-installer'
-  'fakeroot'
-  @PLUGIN_MAKEDEPENDS@
+  'pixman'
+  'libdrm'
 )
 
 source=("$pkgname-$pkgver.tar.gz::@SOURCE_URL@")
@@ -78,7 +75,6 @@ package() {
   install -Dm644 plugin/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.plugin"
 }
 
-# provides/conflicts/replaces are intentionally omitted pending Arch validation.
-# The Gold package installs canvasd/canvas-ctl plus the hypr-canvas* wrappers,
-# so collision policy with any historical hyprland-canvas package must be
-# verified before this template becomes a public PKGBUILD.
+# provides/conflicts/replaces are intentionally omitted. No official Arch
+# package collision was found for the installed Gold CLI/wrapper paths; any
+# historical/AUR relationship must be verified separately before publication.

@@ -10,7 +10,13 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
+#if __has_include(<hyprland/src/managers/PointerManager.hpp>)
 #include <hyprland/src/managers/PointerManager.hpp>
+#elif __has_include(<hyprland/src/pointer/PointerManager.hpp>)
+#include <hyprland/src/pointer/PointerManager.hpp>
+#else
+#error "Unsupported Hyprland PointerManager header layout"
+#endif
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>

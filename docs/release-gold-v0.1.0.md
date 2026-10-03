@@ -19,6 +19,14 @@ compatibility target is Hyprland `0.56.2`, commit
 `efb50993780079460b0cbed1363e2166a2de1d9f`; no universal compatibility with
 other Hyprland versions is claimed.
 
+The initial Arch package target validated for this draft is `x86_64`, pinned
+to the Hyprland `0.56.2` ABI. Hyprland 0.56.2 has been observed with
+`PointerManager.hpp` under both `src/managers/` (Fedora Gold) and
+`src/pointer/` (Arch), so the companion plugin resolves those two known
+header layouts at compile time. The package remains unpublished; its public
+project/source URL and immutable public-source checksum are still pending the
+future repository/tag publication stages.
+
 ## Installation model
 
 `./scripts/install-user` installs the user integration without building the

@@ -1,8 +1,8 @@
 PLUGIN_NAME = hypr-canvas
 
 CXX = g++
-CXXFLAGS = -shared -fPIC -std=c++2b -O2
-CXXFLAGS += $(shell pkg-config --cflags hyprland pixman-1 libdrm)
+PLUGIN_CXXFLAGS = -shared -fPIC -std=c++2b -O2
+PLUGIN_CPPFLAGS = $(shell pkg-config --cflags hyprland pixman-1 libdrm)
 INCLUDES =
 
 SRC = src/main.cpp src/canvas.cpp
@@ -11,7 +11,7 @@ OUT = $(PLUGIN_NAME).so
 all: $(OUT)
 
 $(OUT): $(SRC) src/canvas.hpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRC) -o $(OUT)
+	$(CXX) $(PLUGIN_CXXFLAGS) $(CXXFLAGS) $(PLUGIN_CPPFLAGS) $(CPPFLAGS) $(INCLUDES) $(SRC) -o $(OUT) $(LDFLAGS)
 
 install: $(OUT)
 	hyprctl plugin load $(PWD)/$(OUT)

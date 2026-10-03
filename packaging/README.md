@@ -53,11 +53,12 @@ integration example, the ABI-matched plugin `.so`, documentation, root
 
 The legacy recipe is preserved byte-for-byte as `arch/PKGBUILD.legacy`.
 `arch/PKGBUILD.in` is the Gold template. It is intentionally non-final and
-contains explicit `@...@` placeholders for the public source URL/checksum,
-archive root, architecture, and dependency names that still require validation
-in an Arch environment. It must not be published as a final PKGBUILD until all
-placeholders have been resolved from real evidence; `SKIP` is not part of the
-Gold template.
+contains explicit `@...@` placeholders only for publication-time values such
+as the public project/source URL, source checksum, and archive root. Arch
+`x86_64`, runtime dependencies, and build dependencies have been validated
+against the official Arch repositories. It must not be published as a final
+PKGBUILD until the remaining public-source placeholders have been resolved from
+real evidence; `SKIP` is not part of the Gold template.
 
 ## User-local versus system package paths
 
@@ -78,10 +79,21 @@ The Lua example preserves user-local precedence and only selects the system
 plugin when the user-local artifact is absent. Missing both remains tolerated.
 
 Because `hypr-canvas.so` is a native, ABI-sensitive binary, the Gold package
-cannot use `arch=('any')`. The final Arch architecture list and exact package
-names for the plugin build toolchain plus the `jq`/`flock`/`notify-send`
-runtime providers are **NEEDS ARCH VALIDATION**. Fedora package names are not
-substituted into this Arch template.
+cannot use `arch=('any')`. The initial validated package architecture is
+`x86_64`, and the Gold package pins the Hyprland ABI target to
+`hyprland=0.56.2`. The validated runtime dependencies are `python>=3.12`,
+`python-yaml`, `jq`, `util-linux` (provider of `flock`), and `libnotify`
+(provider of `notify-send`) in addition to Hyprland. The package-specific
+build dependencies are `python-build`, `python-hatchling`,
+`python-installer`, `pixman`, and `libdrm`; the Arch `base-devel`
+contract supplies the compiler, make, pkgconf, and fakeroot tooling.
+
+Hyprland 0.56.2 is shipped with two observed PointerManager header layouts
+across the validated Fedora Gold and Arch environments. The plugin source
+prefers `src/managers/PointerManager.hpp` when present and falls back to
+`src/pointer/PointerManager.hpp`, without changing Canvas behavior. The plugin
+Makefile also preserves caller `CPPFLAGS`, `CXXFLAGS`, and `LDFLAGS` so
+distro hardening flags, including Arch FULL RELRO flags, reach the final link.
 
 `canvasd` and `canvas-ctl` are also installed by the historical Python package,
 while Gold adds `hypr-canvasd` and `hypr-canvas-ctl`. That creates a potential
@@ -93,11 +105,12 @@ replacement policy is assumed in this stage.
 ## Validation status
 
 Stage 5B validates the Gold template and package layout locally from a release
-candidate without a remote. The Fedora validation host does not provide
-`makepkg` or `namcap`, so Arch-native package construction and linting remain a
-future gate. The public source URL and public source checksum also remain
-unset until the repository/tag exists. The release itself remains DRAFT /
-UNRELEASED and `release/metadata.toml` remains `release-preparation`.
+candidate without a remote. Stage 5C validates the Arch package model using an
+official isolated Arch environment; the initial target is `x86_64` with
+Hyprland 0.56.2. The public source URL and public source checksum remain unset
+until the repository/tag exists, and the package has not been published. The
+release itself remains DRAFT / UNRELEASED and `release/metadata.toml` remains
+`release-preparation`.
 
 The historical Git author records that contain the local machine identity are
 not rewritten in Stage 5B. The privacy decision remains pending before public
