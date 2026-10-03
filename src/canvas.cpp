@@ -6,6 +6,7 @@
 #include <hyprland/src/desktop/state/ViewState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
+#include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
@@ -15,6 +16,7 @@
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/protocols/XDGShell.hpp>
+#include <hyprland/src/protocols/core/Subcompositor.hpp>
 #include <hyprland/src/render/ElementRenderer.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/gl/GLElementRenderer.hpp>
@@ -443,12 +445,53 @@ static void hkMouseMoveUnified(CInputManager* self, uint32_t time, bool refocus,
     g_mouseMoveCanvasWindow = prevWindow;
 }
 
+static PHLWINDOW ownerWindowForSurface(const SP<CWLSurfaceResource>& surface) {
+    if (!surface)
+        return nullptr;
+
+    auto top = surface;
+    std::vector<SP<CWLSurfaceResource>> visited;
+    while (top && top->m_role && top->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
+        if (std::ranges::find(visited, top) != visited.end())
+            return nullptr;
+        visited.emplace_back(top);
+
+        const auto role = sc<CSubsurfaceRole*>(top->m_role.get());
+        const auto subsurface = role ? role->m_subsurface.lock() : nullptr;
+        if (!subsurface)
+            return nullptr;
+        top = subsurface->m_parent.lock();
+    }
+
+    const auto hlSurface = Desktop::View::CWLSurface::fromResource(top);
+    const auto view = hlSurface ? hlSurface->view() : nullptr;
+    if (!view)
+        return nullptr;
+
+    if (const auto window = Desktop::View::CWindow::fromView(view))
+        return window;
+
+    const auto popup = Desktop::View::CPopup::fromView(view);
+    if (!popup)
+        return nullptr;
+
+    const auto ownerSurface = popup->getT1Owner();
+    return ownerSurface ? Desktop::View::CWindow::fromView(ownerSurface->view()) : nullptr;
+}
+
 static std::optional<Vector2D> mouseMoveLocalForSurface(const SP<CWLSurfaceResource>& surface) {
-    if (g_mouseMoveInputDepth <= 0 || !g_mouseMoveCanvasWindow || !surface)
+    if (g_mouseMoveInputDepth <= 0 || !surface)
         return std::nullopt;
 
-    const auto window = Desktop::viewState()->query().type(Desktop::View::VIEW_TYPE_WINDOW).surface(surface).runWindow();
-    if (!window || window != g_mouseMoveCanvasWindow || !transformedViewport(window->workspaceID()))
+    const auto ownerWindow = ownerWindowForSurface(surface);
+    if (!ownerWindow || !transformedViewport(ownerWindow->workspaceID()))
+        return std::nullopt;
+
+    // Prefer the window selected by the normal Canvas hit-test. Held-button
+    // motion can skip windowAt(), so only then fall back to the focused
+    // surface's owner window while staying inside mouseMoveUnified.
+    const auto window = g_mouseMoveCanvasWindow ? g_mouseMoveCanvasWindow : ownerWindow;
+    if (window != ownerWindow)
         return std::nullopt;
 
     auto local = Desktop::viewState()->hitTest().surfaceLocalAt(g_mouseMoveScreenPos, window, surface);
