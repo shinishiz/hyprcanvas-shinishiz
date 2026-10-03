@@ -32,6 +32,10 @@ systemctl --user enable --now hypr-canvasd.service
 The repository ships this unit as `examples/hypr-canvasd.service`.
 `./scripts/install-user` installs it and the Gold helper scripts into the
 current user's home without starting or reloading anything by itself.
+By default it does not build the companion plugin. Use
+`./scripts/install-user --with-plugin` only when an explicit ABI-sensitive
+plugin build is desired; that option still does not start or reload runtime
+services.
 
 Check status:
 
@@ -185,7 +189,8 @@ workspace is in Canvas mode.
 The same example preserves the Gold startup ordering. On
 `hyprland.start` it publishes `WAYLAND_DISPLAY`, desktop/session variables,
 and `HYPRLAND_INSTANCE_SIGNATURE` to the user systemd manager, loads
-`~/.local/lib/hypr-canvas/hypr-canvas.so`, and then starts
+`${XDG_DATA_HOME:-$HOME/.local/share}/hyprcanvas-shinishiz/plugins/hypr-canvas.so`,
+and then starts
 `hyprland-session.target`. This is what makes the enabled
 `hypr-canvasd.service` start in the correct Hyprland session.
 
@@ -203,11 +208,20 @@ The Gold plugin was validated against Hyprland 0.56.2 commit
 rebuild it against matching development headers on the target machine. Do not
 assume a binary built for another Hyprland ABI is reusable.
 
-Install the resulting artifact at the location used by the Gold example:
+The canonical source is the monorepo's `plugin/` directory. Install the user
+integration and explicitly build/install the companion plugin with:
 
 ```bash
-install -Dm755 plugin/hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
+./scripts/install-user --with-plugin
 ```
+
+The installed artifact lives at
+`$XDG_DATA_HOME/hyprcanvas-shinishiz/plugins/hypr-canvas.so`, or
+`~/.local/share/hyprcanvas-shinishiz/plugins/hypr-canvas.so` when
+`XDG_DATA_HOME` is unset. The installer does not load it. If the plugin has not
+been installed, the Lua startup keeps going because plugin load failure is
+intentionally tolerated; the Canvas camera/zoom plugin simply remains
+unavailable.
 
 ## EventListener reconnect limitation
 

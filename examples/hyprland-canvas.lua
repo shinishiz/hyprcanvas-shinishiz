@@ -8,12 +8,18 @@
 -- Gold startup ordering: publish the Hyprland session environment to systemd,
 -- load the ABI-matched companion plugin, then start the target that owns the
 -- Canvas daemon service.
+local data_home = os.getenv("XDG_DATA_HOME")
+if not data_home or data_home == "" then
+    data_home = (os.getenv("HOME") or "") .. "/.local/share"
+end
+local plugin_path = data_home .. "/hyprcanvas-shinishiz/plugins/hypr-canvas.so"
+
 hl.on("hyprland.start", function()
     hl.exec_cmd([[
 /bin/sh -lc '
 dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HYPRLAND_INSTANCE_SIGNATURE &&
 systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HYPRLAND_INSTANCE_SIGNATURE &&
-(hyprctl plugin load "$HOME/.local/lib/hypr-canvas/hypr-canvas.so" >/dev/null 2>&1 || true) &&
+(hyprctl plugin load ]] .. string.format("%q", plugin_path) .. [[ >/dev/null 2>&1 || true) &&
 systemctl --user start hyprland-session.target
 '
 ]])

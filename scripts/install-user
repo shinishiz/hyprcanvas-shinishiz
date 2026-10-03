@@ -4,6 +4,117 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin_dir="$HOME/.local/bin"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+plugin_dir="$repo_dir/plugin"
+plugin_install_dir="$data_dir/hyprcanvas-shinishiz/plugins"
+plugin_path="$plugin_install_dir/hypr-canvas.so"
+with_plugin=false
+build_tmpdir=
+dest_tmp=
+
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/install-user [--with-plugin] [--help]
+
+Install the hyprcanvas-shinishiz user integration without modifying the active
+Hyprland runtime.
+
+Default:
+  Install the Gold wrappers and systemd user unit only. The companion plugin is
+  not built or installed.
+
+--with-plugin:
+  Explicitly build the ABI-sensitive companion plugin from plugin/ and install
+  it under XDG_DATA_HOME (or ~/.local/share when XDG_DATA_HOME is unset).
+  The plugin must be built against Hyprland-compatible development headers.
+  This option does not load the plugin, restart the daemon, or reload Hyprland.
+
+--help:
+  Show this help text.
+EOF
+}
+
+error() {
+    printf 'install-user: %s\n' "$*" >&2
+}
+
+cleanup() {
+    if [ -n "$dest_tmp" ] && [ -e "$dest_tmp" ]; then
+        rm -f -- "$dest_tmp"
+    fi
+    if [ -n "$build_tmpdir" ] && [ -d "$build_tmpdir" ]; then
+        rm -f -- "$build_tmpdir/hypr-canvas.so"
+        rmdir -- "$build_tmpdir"
+    fi
+}
+
+trap cleanup EXIT HUP INT TERM
+
+for arg in "$@"; do
+    case "$arg" in
+        --with-plugin)
+            with_plugin=true
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            error "unknown argument: $arg"
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        error "missing build dependency: $1"
+        exit 1
+    }
+}
+
+require_pkg_config_module() {
+    pkg-config --exists "$1" || {
+        error "missing pkg-config module: $1"
+        exit 1
+    }
+}
+
+build_and_install_plugin() {
+    require_command g++
+    require_command make
+    require_command pkg-config
+
+    require_pkg_config_module hyprland
+    require_pkg_config_module pixman-1
+    require_pkg_config_module libdrm
+
+    if [ ! -f "$plugin_dir/Makefile" ]; then
+        error "integrated plugin source is unavailable: $plugin_dir"
+        exit 1
+    fi
+
+    build_tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/hyprcanvas-shinishiz-plugin.XXXXXX")
+    build_out="$build_tmpdir/hypr-canvas.so"
+
+    make -C "$plugin_dir" OUT="$build_out" all
+
+    if [ ! -f "$build_out" ]; then
+        error "plugin build did not produce: $build_out"
+        exit 1
+    fi
+
+    install -d "$plugin_install_dir"
+    dest_tmp=$(mktemp "$plugin_install_dir/.hypr-canvas.so.XXXXXX")
+    install -m755 "$build_out" "$dest_tmp"
+    mv -f -- "$dest_tmp" "$plugin_path"
+    dest_tmp=
+
+    printf '%s\n' "Installed ABI-sensitive companion plugin:"
+    printf '  %s\n' "$plugin_path"
+    printf '%s\n' "The plugin was not loaded; integrate examples/hyprland-canvas.lua separately."
+}
 
 install -d "$bin_dir" "$unit_dir"
 
@@ -28,4 +139,11 @@ printf '  %s\n' "$bin_dir"/hypr-canvas-sync-resize
 printf '  %s\n' "$bin_dir"/hypr-cycle-mode
 printf '  %s\n' "$bin_dir"/hypr-canvas-transition
 printf '  %s\n' "$unit_dir/hypr-canvasd.service"
+
+if [ "$with_plugin" = true ]; then
+    build_and_install_plugin
+else
+    printf '%s\n' "Companion plugin not built (use --with-plugin for an explicit ABI-sensitive build)."
+fi
+
 printf '%s\n' "Merge examples/hyprland-canvas.lua into your Hyprland Lua config separately."

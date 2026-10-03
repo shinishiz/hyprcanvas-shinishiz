@@ -22,6 +22,8 @@ repository destination does not exist in this consolidation stage, and the
 planned `gold-v0.1.0` suite tag has not been created.
 
 The companion `hypr-canvas` source is now consolidated under `plugin/`, with
-its original history and MIT license preserved. Updating the PKGBUILD to build
-and package that component belongs to the later packaging stage; the current
+its original history and MIT license preserved. The user installer can build
+and install that integrated source explicitly with `--with-plugin`, while the
+default installer remains plugin-free. Updating the PKGBUILD to build and
+package that component belongs to the later packaging stage; the current
 PKGBUILD remains intentionally pre-Gold.

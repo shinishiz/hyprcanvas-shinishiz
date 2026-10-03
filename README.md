@@ -103,6 +103,32 @@ Install the versioned user integration wrappers and systemd unit:
 ./scripts/install-user
 ```
 
+This default installation intentionally does **not** build or install the
+ABI-sensitive companion plugin. For a full user installation using the
+integrated `plugin/` source, request that build explicitly:
+
+```bash
+./scripts/install-user --with-plugin
+```
+
+The explicit plugin build validates `g++`, `make`, `pkg-config`, and the
+`hyprland`, `pixman-1`, and `libdrm` pkg-config modules. It never installs
+packages with sudo. The resulting plugin is installed at:
+
+```text
+$XDG_DATA_HOME/hyprcanvas-shinishiz/plugins/hypr-canvas.so
+```
+
+or, when `XDG_DATA_HOME` is unset:
+
+```text
+~/.local/share/hyprcanvas-shinishiz/plugins/hypr-canvas.so
+```
+
+`--with-plugin` only builds and installs the file. It does not load the plugin,
+restart the daemon, or reload Hyprland. The Lua integration example performs
+the plugin load during Hyprland startup and tolerates a missing plugin file.
+
 **pipx:**
 
 ```bash
@@ -268,17 +294,21 @@ source-first: rebuild the plugin against the matching development headers for
 the Hyprland build that will load it. Any prebuilt `.so` is version-specific,
 not universal.
 
-The distributable Lua example expects the ABI-matched plugin at:
+The distributable Lua example expects the ABI-matched plugin installed by the
+suite at:
 
 ```text
-~/.local/lib/hypr-canvas/hypr-canvas.so
+$XDG_DATA_HOME/hyprcanvas-shinishiz/plugins/hypr-canvas.so
 ```
 
-After building the companion plugin from `plugin/`, install its artifact there:
+with fallback to:
 
-```bash
-install -Dm755 plugin/hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
+```text
+~/.local/share/hyprcanvas-shinishiz/plugins/hypr-canvas.so
 ```
+
+Use `./scripts/install-user --with-plugin` to build from `plugin/` and install
+that artifact without loading it automatically.
 
 ## Known runtime limitation
 
