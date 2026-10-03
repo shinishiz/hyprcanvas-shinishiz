@@ -4,7 +4,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from canvas.hypr import CanvasViewport, HyprIPC, HyprIPCError, eval_lua, get_cursor_pos, send
+from canvas.hypr import (
+    CanvasViewport,
+    HyprIPC,
+    HyprIPCError,
+    _hypr_socket2_path,
+    eval_lua,
+    get_cursor_pos,
+    send,
+)
 
 
 def _make_ipc_with_mock(mock_sock: MagicMock) -> HyprIPC:
@@ -178,6 +186,42 @@ def test_from_env_uses_hyprland_socket():
         ipc = HyprIPC.from_env()
 
     assert "test_sig" in ipc._socket_path
+
+
+def test_socket2_strict_instance_does_not_fall_back_to_other_instance():
+    exists = MagicMock(side_effect=lambda path: "/B/" in path)
+    with (
+        patch("canvas.hypr.os.environ.get", return_value="A"),
+        patch("canvas.hypr.os.getuid", return_value=1000),
+        patch("canvas.hypr.os.path.exists", exists),
+        patch("canvas.hypr.os.path.isdir", return_value=True),
+        patch("canvas.hypr.os.listdir", return_value=["B"]),
+        pytest.raises(FileNotFoundError, match="current instance"),
+    ):
+        _hypr_socket2_path(strict_instance=True)
+
+    exists.assert_called_once_with("/run/user/1000/hypr/A/.socket2.sock")
+
+
+def test_socket2_strict_instance_path_can_reappear():
+    exists = MagicMock(side_effect=[False, True])
+    with (
+        patch("canvas.hypr.os.environ.get", return_value="A"),
+        patch("canvas.hypr.os.getuid", return_value=1000),
+        patch("canvas.hypr.os.path.exists", exists),
+        pytest.raises(FileNotFoundError, match="current instance"),
+    ):
+        _hypr_socket2_path(strict_instance=True)
+
+    with (
+        patch("canvas.hypr.os.environ.get", return_value="A"),
+        patch("canvas.hypr.os.getuid", return_value=1000),
+        patch("canvas.hypr.os.path.exists", exists),
+    ):
+        path = _hypr_socket2_path(strict_instance=True)
+
+    assert path == "/run/user/1000/hypr/A/.socket2.sock"
+    assert exists.call_count == 2
 
 
 def test_get_active_window_geometry_parses():

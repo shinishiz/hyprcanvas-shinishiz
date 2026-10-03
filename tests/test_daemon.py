@@ -3,7 +3,7 @@
 import json
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from canvas.daemon import DaemonState, EventListener, _lua_escape
 from canvas.hypr import CanvasViewport
@@ -752,17 +752,277 @@ def _make_event_listener(
     return EventListener(navigator=nav, ipc=ipc, stop_event=stop_event)
 
 
+def _fake_event_socket(
+    reads: list[bytes | BaseException],
+    *,
+    stop_event: threading.Event | None = None,
+    connect_error: OSError | None = None,
+) -> MagicMock:
+    sock = MagicMock()
+    queue = list(reads)
+
+    def recv(_size: int) -> bytes:
+        if queue:
+            item = queue.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+        if stop_event is not None:
+            stop_event.set()
+        return b""
+
+    sock.recv.side_effect = recv
+    if connect_error is not None:
+        sock.connect.side_effect = connect_error
+    return sock
+
+
 def test_event_listener_start_stop():
     """EventListener starts and stops cleanly."""
     ipc = MagicMock()
     navigator = MagicMock()
     stop_event = threading.Event()
     listener = EventListener(navigator=navigator, ipc=ipc, stop_event=stop_event)
-    listener.start()
+    with patch.object(listener, "_run", side_effect=lambda: stop_event.wait()):
+        listener.start()
+        assert listener._thread is not None
+        assert listener._thread.is_alive()
+        listener.stop()
+        assert not listener._thread.is_alive()
+
+
+def test_event_listener_start_while_alive_does_not_duplicate_thread():
+    listener = _make_event_listener()
+    with patch.object(listener, "_run", side_effect=lambda: listener._stop_event.wait()):
+        listener.start()
+        first_thread = listener._thread
+        listener.start()
+
+        assert listener._thread is first_thread
+        listener.stop()
+
+
+def test_event_listener_missing_startup_path_retries_then_connects():
+    listener = _make_event_listener()
+    sock = _fake_event_socket([], stop_event=listener._stop_event)
+    wait = MagicMock(return_value=False)
+    listener._stop_event.wait = wait  # type: ignore[method-assign]
+
+    with (
+        patch(
+            "canvas.daemon._hypr_socket2_path",
+            side_effect=[FileNotFoundError("missing"), "/tmp/socket2"],
+        ) as resolver,
+        patch("canvas.daemon.socket.socket", return_value=sock),
+    ):
+        listener._run()
+
+    assert resolver.call_args_list == [call(strict_instance=True), call(strict_instance=True)]
+    wait.assert_called_once_with(0.25)
+    sock.connect.assert_called_once_with("/tmp/socket2")
+    sock.close.assert_called_once()
+
+
+def test_event_listener_connection_refused_closes_socket_and_retries():
+    listener = _make_event_listener()
+    refused = _fake_event_socket([], connect_error=ConnectionRefusedError(111, "refused"))
+    connected = _fake_event_socket([], stop_event=listener._stop_event)
+    wait = MagicMock(return_value=False)
+    listener._stop_event.wait = wait  # type: ignore[method-assign]
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", return_value="/tmp/socket2") as resolver,
+        patch("canvas.daemon.socket.socket", side_effect=[refused, connected]),
+    ):
+        listener._run()
+
+    assert resolver.call_count == 2
+    wait.assert_called_once_with(0.25)
+    refused.close.assert_called_once()
+    connected.close.assert_called_once()
+
+
+def test_event_listener_eof_reconnects_and_stays_alive_until_stop():
+    listener = _make_event_listener()
+    first = _fake_event_socket([b"closewindow>>aaa\n", b""])
+    release = threading.Event()
+    second_seen = threading.Event()
+    second = MagicMock()
+    second_reads = iter([b"closewindow>>bbb\n"])
+
+    def second_recv(_size: int) -> bytes:
+        try:
+            return next(second_reads)
+        except StopIteration:
+            release.wait(timeout=1)
+            raise OSError("closed") from None
+
+    second.recv.side_effect = second_recv
+    second.close.side_effect = release.set
+
+    def record_line(line: str) -> None:
+        if line == "closewindow>>bbb":
+            second_seen.set()
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", return_value="/tmp/socket2"),
+        patch("canvas.daemon.socket.socket", side_effect=[first, second]),
+        patch.object(listener, "_handle_line", side_effect=record_line) as handle,
+    ):
+        listener.start()
+        assert second_seen.wait(timeout=1)
+        assert listener._thread is not None
+        assert listener._thread.is_alive()
+        listener.stop()
+
+    assert [c.args[0] for c in handle.call_args_list] == [
+        "closewindow>>aaa",
+        "closewindow>>bbb",
+    ]
+    first.close.assert_called_once()
+    assert second.close.call_count >= 1
+
+
+def test_event_listener_connection_reset_reconnects():
+    listener = _make_event_listener()
+    first = _fake_event_socket([ConnectionResetError(104, "reset")])
+    second = _fake_event_socket([b"closewindow>>bbb\n"], stop_event=listener._stop_event)
+    wait = MagicMock(return_value=False)
+    listener._stop_event.wait = wait  # type: ignore[method-assign]
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", return_value="/tmp/socket2"),
+        patch("canvas.daemon.socket.socket", side_effect=[first, second]),
+        patch.object(listener, "_handle_line") as handle,
+    ):
+        listener._run()
+
+    handle.assert_called_once_with("closewindow>>bbb")
+    wait.assert_called_once_with(0.25)
+    first.close.assert_called_once()
+    second.close.assert_called_once()
+
+
+def test_event_listener_partial_read_same_connection_is_preserved():
+    listener = _make_event_listener()
+    sock = _fake_event_socket(
+        [b"openwindow>>ABC", b",2,kitty,kitty\n"],
+        stop_event=listener._stop_event,
+    )
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", return_value="/tmp/socket2"),
+        patch("canvas.daemon.socket.socket", return_value=sock),
+        patch.object(listener, "_handle_line") as handle,
+    ):
+        listener._run()
+
+    handle.assert_called_once_with("openwindow>>ABC,2,kitty,kitty")
+
+
+def test_event_listener_partial_read_does_not_cross_reconnect():
+    listener = _make_event_listener()
+    first = _fake_event_socket([b"openwindow>>STALE_PARTIAL", b""])
+    second = _fake_event_socket(
+        [b"openwindow>>REAL_EVENT\n"],
+        stop_event=listener._stop_event,
+    )
+    listener._stop_event.wait = MagicMock(return_value=False)  # type: ignore[method-assign]
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", return_value="/tmp/socket2"),
+        patch("canvas.daemon.socket.socket", side_effect=[first, second]),
+        patch.object(listener, "_handle_line") as handle,
+    ):
+        listener._run()
+
+    handle.assert_called_once_with("openwindow>>REAL_EVENT")
+
+
+def test_event_listener_multiple_events_in_one_recv_preserve_order():
+    listener = _make_event_listener()
+    sock = _fake_event_socket(
+        [b"closewindow>>aaa\nclosewindow>>bbb\nclosewindow>>ccc\n"],
+        stop_event=listener._stop_event,
+    )
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", return_value="/tmp/socket2"),
+        patch("canvas.daemon.socket.socket", return_value=sock),
+        patch.object(listener, "_handle_line") as handle,
+    ):
+        listener._run()
+
+    assert [c.args[0] for c in handle.call_args_list] == [
+        "closewindow>>aaa",
+        "closewindow>>bbb",
+        "closewindow>>ccc",
+    ]
+
+
+def test_event_listener_handler_exception_does_not_kill_connection(caplog):
+    listener = _make_event_listener()
+    sock = _fake_event_socket(
+        [b"openwindow>>bad\nclosewindow>>good\n"],
+        stop_event=listener._stop_event,
+    )
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", return_value="/tmp/socket2"),
+        patch("canvas.daemon.socket.socket", return_value=sock),
+        patch.object(listener, "_handle_line", side_effect=[RuntimeError("boom"), None]) as handle,
+    ):
+        listener._run()
+
+    assert handle.call_count == 2
+    assert "EventListener handler failed for event openwindow" in caplog.text
+    assert "RuntimeError: boom" in caplog.text
+    sock.connect.assert_called_once()
+
+
+def test_event_listener_stop_interrupts_backoff_without_retry():
+    stop_event = threading.Event()
+    listener = EventListener(navigator=MagicMock(), ipc=MagicMock(), stop_event=stop_event)
+    entered_backoff = threading.Event()
+    real_wait = stop_event.wait
+
+    def tracked_wait(delay: float | None = None) -> bool:
+        entered_backoff.set()
+        return real_wait(delay)
+
+    stop_event.wait = tracked_wait  # type: ignore[method-assign]
+
+    with (
+        patch("canvas.daemon._EVENT_RECONNECT_DELAYS", (60.0,)),
+        patch(
+            "canvas.daemon._hypr_socket2_path",
+            side_effect=FileNotFoundError("missing"),
+        ) as resolver,
+    ):
+        listener.start()
+        assert entered_backoff.wait(timeout=1)
+        listener.stop()
+
     assert listener._thread is not None
-    assert listener._thread.is_alive()
-    listener.stop()
     assert not listener._thread.is_alive()
+    resolver.assert_called_once_with(strict_instance=True)
+
+
+def test_event_listener_stop_between_attempts_does_not_create_socket():
+    listener = _make_event_listener()
+
+    def resolve_then_stop(*, strict_instance: bool) -> str:
+        assert strict_instance is True
+        listener._stop_event.set()
+        return "/tmp/socket2"
+
+    with (
+        patch("canvas.daemon._hypr_socket2_path", side_effect=resolve_then_stop),
+        patch("canvas.daemon.socket.socket") as socket_factory,
+    ):
+        listener._run()
+
+    socket_factory.assert_not_called()
 
 
 def test_event_listener_openwindow_tiled_converts_to_floating():

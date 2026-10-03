@@ -75,13 +75,22 @@ def _hypr_socket_path() -> str:
     raise FileNotFoundError("Hyprland socket not found")
 
 
-def _hypr_socket2_path() -> str:
-    """Resolve the Hyprland event socket (.socket2.sock) path."""
+def _hypr_socket2_path(*, strict_instance: bool = False) -> str:
+    """Resolve the Hyprland event socket (.socket2.sock) path.
+
+    When ``strict_instance`` is true and HYPRLAND_INSTANCE_SIGNATURE is set,
+    never fall back to another Hyprland instance.  This keeps a reconnecting
+    event listener attached to the same compositor as its existing HyprIPC.
+    """
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
     uid = os.getuid()
     base = f"/run/user/{uid}/hypr"
-    if sig and os.path.exists(f"{base}/{sig}/.socket2.sock"):
-        return f"{base}/{sig}/.socket2.sock"
+    if sig:
+        expected = f"{base}/{sig}/.socket2.sock"
+        if os.path.exists(expected):
+            return expected
+        if strict_instance:
+            raise FileNotFoundError("Hyprland event socket not found for current instance")
     if os.path.isdir(base):
         for d in sorted(os.listdir(base)):
             sock = f"{base}/{d}/.socket2.sock"

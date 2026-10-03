@@ -31,6 +31,7 @@ _VALID_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
 _MAX_OPENWINDOW_RETRIES = 3
 _OPENWINDOW_RETRY_DELAY = 0.05  # 50ms
+_EVENT_RECONNECT_DELAYS = (0.25, 0.5, 1.0, 2.0, 5.0)
 
 def _lua_escape(s: str) -> str:
     """Escape a string for safe interpolation into a Lua double-quoted literal."""
@@ -56,6 +57,9 @@ class EventListener:
 
     def start(self) -> None:
         """Start the event listener thread."""
+        if self._thread is not None and self._thread.is_alive():
+            log.debug("EventListener already running")
+            return
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         log.debug("EventListener started")
@@ -63,47 +67,121 @@ class EventListener:
     def stop(self) -> None:
         """Stop the event listener thread."""
         self._stop_event.set()
-        if self._sock:
+        sock = self._sock
+        self._sock = None
+        if sock:
             with contextlib.suppress(Exception):
-                self._sock.close()
+                sock.close()
         if self._thread:
             self._thread.join(timeout=1)
         log.debug("EventListener stopped")
 
     def _run(self) -> None:
-        """Main event loop."""
-        sock_path = _hypr_socket2_path()
-        try:
-            self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self._sock.settimeout(1.0)
-            self._sock.connect(sock_path)
-        except Exception as e:
-            log.warning("EventListener failed to connect to %s: %s", sock_path, e)
-            return
-
-        buffer = ""
+        """Main event loop with reconnect for transient socket2 failures."""
+        failure_count = 0
+        ever_connected = False
         while not self._stop_event.is_set():
-            # Process pending retries
-            self._process_pending_retries()
+            sock: socket.socket | None = None
+            sock_path = "<unresolved>"
+            connected = False
+            transport_error: OSError | None = None
 
             try:
-                chunk = self._sock.recv(4096)
-                if not chunk:
+                sock_path = _hypr_socket2_path(strict_instance=True)
+                if self._stop_event.is_set():
                     break
-                buffer += chunk.decode("utf-8", errors="replace")
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    self._handle_line(line.strip())
-            except TimeoutError:
-                continue
-            except OSError as e:
+
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self._sock = sock
+                sock.settimeout(1.0)
+                sock.connect(sock_path)
+                connected = True
+                failure_count = 0
+                if ever_connected:
+                    log.info("EventListener reconnected to %s", sock_path)
+                else:
+                    log.info("EventListener connected to %s", sock_path)
+                    ever_connected = True
+
+                # Framing state belongs to this connection only.  A partial
+                # line from a dead stream must never bleed into a reconnect.
+                buffer = ""
+                while not self._stop_event.is_set():
+                    try:
+                        self._process_pending_retries()
+                    except Exception:
+                        log.exception("EventListener pending retry handler failed")
+
+                    try:
+                        chunk = sock.recv(4096)
+                    except TimeoutError:
+                        continue
+                    except OSError as exc:
+                        if not self._stop_event.is_set():
+                            log.warning("EventListener disconnected from %s: %s", sock_path, exc)
+                        break
+
+                    if not chunk:
+                        if not self._stop_event.is_set():
+                            log.warning("EventListener reached EOF from %s", sock_path)
+                        break
+
+                    buffer += chunk.decode("utf-8", errors="replace")
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        stripped = line.strip()
+                        try:
+                            self._handle_line(stripped)
+                        except Exception:
+                            event_name = (
+                                stripped.split(">>", 1)[0].strip()
+                                if ">>" in stripped
+                                else "<malformed>"
+                            )
+                            log.exception("EventListener handler failed for event %s", event_name)
+            except (FileNotFoundError, OSError) as exc:
+                transport_error = exc
                 if not self._stop_event.is_set():
-                    log.debug("EventListener socket error: %s", e)
+                    delay = _EVENT_RECONNECT_DELAYS[
+                        min(failure_count, len(_EVENT_RECONNECT_DELAYS) - 1)
+                    ]
+                    if failure_count <= len(_EVENT_RECONNECT_DELAYS) - 1:
+                        log.warning(
+                            "EventListener connect/path failure for %s: %s; retrying in %.2fs",
+                            sock_path,
+                            exc,
+                            delay,
+                        )
+                    else:
+                        log.debug(
+                            "EventListener still unable to connect to %s: %s; retrying in %.2fs",
+                            sock_path,
+                            exc,
+                            delay,
+                        )
+            finally:
+                if sock is not None:
+                    with contextlib.suppress(OSError):
+                        sock.close()
+                if self._sock is sock:
+                    self._sock = None
+
+            if self._stop_event.is_set():
                 break
 
-        if self._sock:
-            self._sock.close()
-            self._sock = None
+            delay = _EVENT_RECONNECT_DELAYS[
+                min(failure_count, len(_EVENT_RECONNECT_DELAYS) - 1)
+            ]
+            if connected:
+                # A successful connection resets the backoff, so any later
+                # disconnect retries quickly.
+                failure_count = 0
+                log.debug("EventListener retrying after disconnect in %.2fs", delay)
+            elif transport_error is not None:
+                failure_count += 1
+
+            if self._stop_event.wait(delay):
+                break
 
     def _handle_line(self, line: str) -> None:
         """Handle a single event line from socket2."""
