@@ -1,5 +1,10 @@
 # v1.5.0 — Hyprland Canvas integration improvements
 
+> Historical document: this release note describes the legacy
+> `shinishiz/hyprland-canvas` fork and its historical publication URLs. It is
+> retained for provenance and does not identify the current
+> `hyprcanvas-shinishiz` publication target.
+
 ## Summary
 
 First public release of the `shinishiz/hyprland-canvas` fork.

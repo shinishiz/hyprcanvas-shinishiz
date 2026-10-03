@@ -191,21 +191,23 @@ and `HYPRLAND_INSTANCE_SIGNATURE` to the user systemd manager, loads
 
 ## Companion plugin ABI
 
-The Canvas camera/zoom bridge depends on the separate `hypr-canvas` plugin.
-The Gold plugin was built against Hyprland 0.56.2 headers. Because the plugin
-exports the `HYPRLAND_API_VERSION` from those headers and hooks Hyprland
-internals, rebuild it against the matching development headers on the target
-machine. Do not assume a binary built for another Hyprland ABI is reusable.
+The Canvas camera/zoom bridge depends on the `hypr-canvas` companion plugin,
+whose source is integrated under `plugin/`. That source is derived from the
+historical `aaronsb/hypr-canvas` codebase and has additional compatibility and
+integration work for the Gold setup. The original plugin base was not
+compatible out of the box with the current Gold environment.
+
+The Gold plugin was validated against Hyprland 0.56.2 commit
+`efb50993780079460b0cbed1363e2166a2de1d9f`. Because the plugin exports the
+`HYPRLAND_API_VERSION` from its build headers and hooks Hyprland internals,
+rebuild it against matching development headers on the target machine. Do not
+assume a binary built for another Hyprland ABI is reusable.
 
 Install the resulting artifact at the location used by the Gold example:
 
 ```bash
-install -Dm755 hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
+install -Dm755 plugin/hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
 ```
-
-The plugin source/build is still outside this daemon repository, so packaging
-is not fully self-contained until the Gold consolidation chooses how to ship
-that companion component.
 
 ## EventListener reconnect limitation
 

@@ -1,20 +1,32 @@
-# Hyprland Canvas
+# hyprcanvas-shinishiz
 
-Pan floating windows like an infinite desktop on Hyprland.
+An independent Hyprland Canvas suite maintained by **shinishiz**, combining
+and extending work derived from the `zyrophix/hyprland-canvas` daemon and the
+`aaronsb/hypr-canvas` companion plugin codebase.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/shinishiz/hyprland-canvas/ci.yml)](https://github.com/shinishiz/hyprland-canvas/actions)
-[![Release](https://img.shields.io/github/v/release/shinishiz/hyprland-canvas)](https://github.com/shinishiz/hyprland-canvas/releases)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Fork of [zyrophix/hyprland-canvas](https://github.com/zyrophix/hyprland-canvas) with additional window integration and workspace workflow improvements.
+This is an independent project. It is not the official upstream for either
+`zyrophix/hyprland-canvas` or Aaron Bockelie's `aaronsb/hypr-canvas`. The
+daemon, Gold integration, packaging, and adapted companion plugin now live in
+one source tree. See [CREDITS.md](CREDITS.md) and
+[THIRD_PARTY.md](THIRD_PARTY.md) for provenance details.
+
+**Current status:** Gold consolidation / release preparation
+
+**Planned initial Gold suite tag:** `gold-v0.1.0` (not released)
+
+**Integrated component versions:** Python daemon `1.5.0`; companion plugin
+`0.1`
 
 Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canvas mode per workspace. Runs as an unprivileged user daemon — communicates directly with Hyprland via its IPC socket and Lua API.
 
 <video src="https://github.com/user-attachments/assets/6bb06c3e-c553-481d-b726-15033ed8ac37" autoplay loop muted playsinline width="900">Demo: panning floating windows as an infinite desktop</video>
 
-## What this fork adds
+## Gold integration
 
-This fork adds the following improvements over the upstream:
+The integrated Gold tree contains the following improvements over its
+historical daemon base:
 
 - **Automatic handling of windows opened while Canvas is active** — newly opened tiled windows automatically become part of the Canvas (become floating with sensible geometry)
 - **Socket2 event listener** — real-time window lifecycle events via Hyprland's `.socket2.sock`, with transport reconnect recovery
@@ -68,18 +80,20 @@ movement:
 
 ## Installation
 
-The Gold integration is validated against Hyprland **0.56.2**. The companion
-`hypr-canvas` plugin is ABI-sensitive and must be built against the headers
-for the Hyprland version that will load it. The daemon requires Python 3.12+.
+The Gold integration is currently validated against Hyprland **0.56.2**, commit
+`efb50993780079460b0cbed1363e2166a2de1d9f`. The companion `hypr-canvas`
+plugin uses Hyprland headers and internals and is ABI-sensitive. Build it from
+the source in `plugin/` against the matching target Hyprland development
+headers. A prebuilt `.so` must not be assumed to work across Hyprland versions.
+The daemon requires Python 3.12+.
 
 Runtime integration also uses `jq`, `flock` (util-linux), and
 `notify-send` (libnotify).
 
-**uv (recommended):**
+The public repository URL is pending publication. From a local checkout of
+this tree, install the Python component with **uv** (recommended):
 
 ```bash
-git clone https://github.com/shinishiz/hyprland-canvas.git
-cd hyprland-canvas
 uv tool install .
 ```
 
@@ -92,8 +106,6 @@ Install the versioned user integration wrappers and systemd unit:
 **pipx:**
 
 ```bash
-git clone https://github.com/shinishiz/hyprland-canvas.git
-cd hyprland-canvas
 pipx install .
 ```
 
@@ -106,8 +118,6 @@ Then install the user integration files:
 **Run from source (no install):**
 
 ```bash
-git clone https://github.com/shinishiz/hyprland-canvas.git
-cd hyprland-canvas
 uv run canvasd
 ```
 
@@ -198,11 +208,12 @@ at daemon startup with the exact offending keys listed on stderr.
 - `docs/` — [debugging.md](docs/debugging.md): logs, tracing, common failures
 - `examples/hyprland-canvas.lua` — distributable Gold Hyprland integration
 - `examples/hypr-canvasd.service` — portable systemd user unit
+- `plugin/` — adapted companion plugin source, with its original MIT license
 - `scripts/` — versioned Gold wrappers/state-machine helpers plus user installer
 - `config.yml` — ready-to-copy config template
 - `pyproject.toml` — package metadata, pytest/ruff/mypy config
 
-## What this fork adds (vs upstream)
+## Gold additions relative to the historical daemon base
 
 | Feature | Status |
 |---------|--------|
@@ -243,12 +254,19 @@ The installer puts these versioned files in `~/.local/bin/`:
 
 ## Companion plugin and ABI
 
-The camera/zoom integration also requires the separate `hypr-canvas` plugin.
-The Gold plugin build was produced for Hyprland 0.56.2 and returns
-`HYPRLAND_API_VERSION` from the headers used at compile time. Treat its
-`.so` as ABI-coupled to that Hyprland build; rebuild the plugin against the
-target machine's matching Hyprland development headers instead of reusing a
-binary across incompatible Hyprland versions.
+The camera/zoom integration uses the companion `hypr-canvas` plugin whose
+source is now integrated under `plugin/`. That source is derived from Aaron
+Bockelie's `aaronsb/hypr-canvas` codebase. The original upstream plugin was a
+historical foundation; it was not compatible out of the box with the current
+Gold setup. The integrated companion plugin includes later compatibility and
+integration work for this suite.
+
+The Gold plugin build was validated against Hyprland 0.56.2 commit
+`efb50993780079460b0cbed1363e2166a2de1d9f` and returns
+`HYPRLAND_API_VERSION` from the headers used at compile time. Releases are
+source-first: rebuild the plugin against the matching development headers for
+the Hyprland build that will load it. Any prebuilt `.so` is version-specific,
+not universal.
 
 The distributable Lua example expects the ABI-matched plugin at:
 
@@ -256,15 +274,11 @@ The distributable Lua example expects the ABI-matched plugin at:
 ~/.local/lib/hypr-canvas/hypr-canvas.so
 ```
 
-After building the companion plugin, install its artifact there:
+After building the companion plugin from `plugin/`, install its artifact there:
 
 ```bash
-install -Dm755 hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
+install -Dm755 plugin/hypr-canvas.so "$HOME/.local/lib/hypr-canvas/hypr-canvas.so"
 ```
-
-The current Gold plugin source is still maintained separately, so a future
-consolidated release must decide how that source/build is shipped before a
-clean install can be called fully self-contained.
 
 ## Known runtime limitation
 
@@ -273,20 +287,16 @@ during the disconnected interval are not replayed, so lifecycle state can miss
 an event until a later operation reconciles it. This is a known Gold limitation
 and should remain documented unless a separate reconciler stage closes the gap.
 
-## Updating from upstream
+## Maintainer / Gold integration
 
-Remotes:
-- `origin` → your fork (push access)
-- `upstream` → zyrophix/hyprland-canvas (read-only)
+**shinishiz** maintains `hyprcanvas-shinishiz` and is responsible for the Gold
+integration, Hyprland compatibility work for the Gold setup, daemon/plugin
+integration, packaging and integration work, testing and validation, release
+engineering, and ongoing maintenance of this project.
 
-```bash
-# Sync upstream changes
-git fetch upstream
-git rebase upstream/main
-
-# Push to your fork
-git push origin main
-```
+These responsibilities describe the work on this independent suite; they do
+not replace or reassign the original authorship and copyrights of its
+historical daemon and plugin bases.
 
 ## Tested on
 
@@ -306,9 +316,20 @@ uv run mypy canvas
 
 ## Credits
 
-- Original: [zyrophix/hyprland-canvas](https://github.com/zyrophix/hyprland-canvas)
-- Fork maintained by: shinishiz
-- Companion plugin: [Aaron Bockelie / aaronsb/hypr-canvas](https://github.com/aaronsb/hypr-canvas) — MIT, maintained separately
+- **shinishiz** — project maintainer; Gold integration, compatibility and
+  daemon/plugin integration work, packaging, testing/validation, and release
+  engineering.
+- **zyrophix** — author of the original
+  [hyprland-canvas](https://github.com/zyrophix/hyprland-canvas) daemon and
+  foundational Canvas implementation used as the daemon history/base.
+- **Aaron Bockelie** — author of the original
+  [aaronsb/hypr-canvas](https://github.com/aaronsb/hypr-canvas) companion
+  plugin codebase used as the historical foundation for `plugin/`. The
+  integrated Gold plugin is an adapted version with additional compatibility
+  and integration work.
+
+See [CREDITS.md](CREDITS.md) and [THIRD_PARTY.md](THIRD_PARTY.md) for the full
+provenance record.
 
 ## License
 

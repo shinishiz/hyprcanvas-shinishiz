@@ -1,4 +1,8 @@
-# Gold packaging status
+# hyprcanvas-shinishiz Gold packaging status
+
+Target project: `hyprcanvas-shinishiz`
+
+Planned initial suite tag: `gold-v0.1.0` (not released)
 
 The current Gold integration is installed from a checkout with:
 
@@ -12,12 +16,12 @@ portable systemd user unit, and leaves Hyprland configuration merging explicit
 via `examples/hyprland-canvas.lua`.
 
 `arch/PKGBUILD` predates the current Gold chain. It still references the older
-upstream/tag packaging source and must not be treated as a reproducible Gold
-package until the final repository destination and release tag/version are
-chosen. Updating that source prematurely would point the package at content
-that does not contain the local Gold commits.
+`zyrophix/hyprland-canvas` upstream/tag packaging source and must not be
+treated as a reproducible `hyprcanvas-shinishiz` package yet. The public
+repository destination does not exist in this consolidation stage, and the
+planned `gold-v0.1.0` suite tag has not been created.
 
-The companion `hypr-canvas` plugin is also still maintained in its separate
-repository. A self-contained public package therefore remains blocked on the
-Gold repository/tag strategy even though the local checkout install path is
-reproducible.
+The companion `hypr-canvas` source is now consolidated under `plugin/`, with
+its original history and MIT license preserved. Updating the PKGBUILD to build
+and package that component belongs to the later packaging stage; the current
+PKGBUILD remains intentionally pre-Gold.
