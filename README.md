@@ -1,23 +1,75 @@
 # hyprcanvas-shinishiz
 
-An independent Hyprland Canvas suite maintained by **shinishiz**, combining
-and extending work derived from the `zyrophix/hyprland-canvas` daemon and the
-`aaronsb/hypr-canvas` companion plugin codebase.
+An infinite-canvas workspace suite for Hyprland, combining a Python daemon,
+Hyprland integration, and an ABI-matched companion plugin for panning,
+navigation, window lifecycle handling, and camera zoom.
 
+[![CI](https://github.com/shinishiz/hyprcanvas-shinishiz/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shinishiz/hyprcanvas-shinishiz/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/shinishiz/hyprcanvas-shinishiz?display_name=tag)](https://github.com/shinishiz/hyprcanvas-shinishiz/releases/tag/gold-v0.1.0)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg)](pyproject.toml)
+[![Hyprland 0.56.2](https://img.shields.io/badge/Hyprland-0.56.2-58E1FF.svg)](#companion-plugin-and-abi)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-This is an independent project. It is not the official upstream for either
-`zyrophix/hyprland-canvas` or Aaron Bockelie's `aaronsb/hypr-canvas`. The
-daemon, Gold integration, packaging, and adapted companion plugin now live in
-one source tree. See [CREDITS.md](CREDITS.md) and
-[THIRD_PARTY.md](THIRD_PARTY.md) for provenance details.
+<video src="https://github.com/user-attachments/assets/6bb06c3e-c553-481d-b726-15033ed8ac37" autoplay loop muted playsinline width="900">Demo: panning floating windows as an infinite desktop</video>
+
+## Features
+
+- **Automatic handling of windows opened while Canvas is active** — newly opened tiled windows automatically become part of the Canvas (become floating with sensible geometry)
+- **Socket2 event listener** — real-time window lifecycle events via Hyprland's `.socket2.sock`, with transport reconnect recovery
+- **Viewport-aware spawn geometry** — new windows use the tiled snapshot's median size and spawn at the visual Canvas viewport center
+- **Restoration to tiled state** — when leaving Canvas, windows return to their tiled positions correctly
+- **Safer address normalization** — robust window address handling between socket2 events and `j/clients`
+- **Hyprland 0.56.2 compatibility** — updated for API changes in 0.56.2
+
+Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, and toggle
+Canvas mode per workspace. The daemon runs as an unprivileged user and
+communicates directly with Hyprland through its IPC socket and Lua API.
+
+## Quick Install
+
+For the validated Hyprland **0.56.2** target:
+
+```bash
+git clone https://github.com/shinishiz/hyprcanvas-shinishiz.git
+cd hyprcanvas-shinishiz
+uv tool install .
+./scripts/install-user --with-plugin
+systemctl --user daemon-reload
+systemctl --user enable --now hypr-canvasd.service
+```
+
+Then merge the Canvas-specific parts from
+[`examples/hyprland-canvas.lua`](examples/hyprland-canvas.lua) into your
+Hyprland Lua configuration.
+
+The companion plugin is ABI-sensitive and source-first. Build it against the
+development headers for the Hyprland build that will load it; do not treat a
+compiled `.so` as portable across Hyprland versions. See
+[Installation](#installation) and [Companion plugin and ABI](#companion-plugin-and-abi)
+for the full setup details.
+
+## Components and versions
+
+| Component | Name | Version |
+| --- | --- | --- |
+| Suite | hyprcanvas-shinishiz | 0.1.0 |
+| Daemon | hyprland-canvas | 1.5.0 |
+| Plugin | hypr-canvas | 0.1 |
+| Hyprland target | Hyprland | 0.56.2 |
+
+## Project status and provenance
+
+This is an independent project maintained by **shinishiz**, combining and
+extending work derived from the `zyrophix/hyprland-canvas` daemon and Aaron
+Bockelie's `aaronsb/hypr-canvas` companion plugin codebase. It is not the
+official upstream for either historical project. The daemon, Gold integration,
+packaging, and adapted companion plugin live in one source tree. See
+[CREDITS.md](CREDITS.md) and [THIRD_PARTY.md](THIRD_PARTY.md) for provenance
+details.
 
 **Current status:** `gold-v0.1.0` published.
 
 **Gold Release:** <https://github.com/shinishiz/hyprcanvas-shinishiz/releases/tag/gold-v0.1.0>
-
-**Integrated component versions:** Python daemon `1.5.0`; companion plugin
-`0.1`
 
 ## Versioning
 
@@ -33,22 +85,6 @@ history. The plugin's original repository used a `v0.1.0` tag, but that tag was
 intentionally not imported during monorepo consolidation. Neither component
 tag namespace represents releases of this suite. New suite release tags use
 the `gold-v*` namespace.
-
-Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canvas mode per workspace. Runs as an unprivileged user daemon — communicates directly with Hyprland via its IPC socket and Lua API.
-
-<video src="https://github.com/user-attachments/assets/6bb06c3e-c553-481d-b726-15033ed8ac37" autoplay loop muted playsinline width="900">Demo: panning floating windows as an infinite desktop</video>
-
-## Gold integration
-
-The integrated Gold tree contains the following improvements over its
-historical daemon base:
-
-- **Automatic handling of windows opened while Canvas is active** — newly opened tiled windows automatically become part of the Canvas (become floating with sensible geometry)
-- **Socket2 event listener** — real-time window lifecycle events via Hyprland's `.socket2.sock`, with transport reconnect recovery
-- **Viewport-aware spawn geometry** — new windows use the tiled snapshot's median size and spawn at the visual Canvas viewport center
-- **Restoration to tiled state** — when leaving Canvas, windows return to their tiled positions correctly
-- **Safer address normalization** — robust window address handling between socket2 events and j/clients
-- **Hyprland 0.56.2 compatibility** — updated for API changes in 0.56.2
 
 ## Workspace workflow
 

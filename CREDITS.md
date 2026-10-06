@@ -61,5 +61,5 @@ The Python daemon retains its historical component identity (`hyprland-canvas`
 and internal version 0.1. `hyprcanvas-shinishiz` is the suite/project identity
 that brings those components and the Gold integration together.
 
-The planned initial suite tag is `gold-v0.1.0`. It is a release-preparation
-target and has not been created or released at this stage.
+The initial suite tag is `gold-v0.1.0`. It was created and published as the
+Gold v0.1.0 suite release on October 3, 2026.
